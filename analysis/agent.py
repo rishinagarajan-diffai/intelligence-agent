@@ -32,19 +32,48 @@ def _get_client() -> AsyncClient:
 # Prompt templates
 # ---------------------------------------------------------------------------
 
+CLASSIFIER_PROMPT = """\
+Classify each ad below by its primary goal. Use only these four labels:
+  form_lead_gen   — lead capture: "Download", "Get the guide", "Start free", form fills
+  engagement_brand — brand/awareness: storytelling, authority, no immediate conversion ask
+  webinar_event   — time-bound event: "Register", "Join us", "Watch now", date references
+  unknown         — cannot be determined from available copy
+
+Return JSON only: {{"classifications": [{{"ad_id": "<str>", "type": "<str>"}}]}}
+
+Ads:
+{ads_json}"""
+
 VOICE_PROMPT = """\
-Analyze these {total_ads} ads from {advertiser} across {platform_count} platform(s) and \
-extract brand voice patterns. Return only a JSON object with these exact fields:
+You are learning {advertiser}'s brand voice well enough to write new ads \
+indistinguishable from their real ones.
+
+Study these {total_ads} ads and return a JSON object that answers: \
+"What do I need to know to write a new {advertiser} ad?"
 
 {{
-  "avg_sentence_length": <int, words per sentence averaged>,
-  "tone_descriptors": [<3-5 adjectives describing the voice>],
+  "headline_formula": "<the pattern they follow, e.g. Free [Product] — [Benefit]>",
+  "avg_sentence_length": <int>,
+  "tone_descriptors": [<3-5 adjectives>],
   "vocabulary_level": "<technical|plain|mixed>",
-  "recurring_phrases": [<phrases appearing 3+ times>],
-  "cta_patterns": [<distinct CTA constructions used>],
-  "avoided_patterns": [<marketing clichés they notably avoid>],
-  "headline_structure": "<describe the typical headline formula>",
-  "body_structure": "<describe how body copy is typically structured>"
+  "signature_phrases": [<words/phrases that feel distinctly on-brand, 5-10 items>],
+  "cta_patterns": [<exact CTA constructions from the ads>],
+  "what_they_never_say": [<marketing clichés, jargon, or styles they avoid>],
+  "opening_hook_pattern": "<how they open — benefit claim, feature name, free offer, question>",
+  "by_type": {{
+    "form_lead_gen": {{
+      "headline_pattern": "<formula for this type>",
+      "example_headline": "<verbatim from the data, or empty string if no examples>"
+    }},
+    "engagement_brand": {{
+      "headline_pattern": "<formula for this type>",
+      "example_headline": "<verbatim from the data, or empty string if no examples>"
+    }},
+    "webinar_event": {{
+      "headline_pattern": "<formula for this type>",
+      "example_headline": "<verbatim from the data, or empty string if no examples>"
+    }}
+  }}
 }}
 
 Ad copy data:
@@ -151,6 +180,39 @@ Competitor angle distributions:
 Competitor format distributions:
 {competitor_formats}"""
 
+SYNTHETIC_PROMPT = """\
+You have analyzed {advertiser}'s advertising and know their brand voice. \
+Now write {n} complete ads that are indistinguishable from real {advertiser} ads.
+
+What you know about their voice:
+{voice_summary}
+
+Real ad examples from the data:
+{sample_copy}
+
+Scenario for the new ads: {scenario}
+
+Return JSON only:
+{{
+  "synthetic_ads": [
+    {{
+      "type": "form_lead_gen or engagement_brand or webinar_event",
+      "headline": "<headline in their exact style>",
+      "primary_text": "<1-3 sentences of body copy in their voice>",
+      "cta": "<button text they would use>",
+      "visual_description": "<one sentence: what the image would look like>",
+      "why_on_brand": "<which specific voice pattern from above this follows>"
+    }}
+  ]
+}}
+
+Rules:
+- Generate {n} ads total
+- Include at least one form_lead_gen and one engagement_brand
+- Only include webinar_event if the voice data shows they run that type
+- Every word must match their observed vocabulary and style
+- Do not invent claims that aren't supported by their patterns"""
+
 SYSTEM_ANALYST = (
     "You are an expert advertising analyst. "
     "Always respond with valid JSON only. "
@@ -213,6 +275,28 @@ def _is_real_copy(text: str) -> bool:
     return True
 
 
+async def _pass_classify(advertiser: str, ads: list[dict], console=None) -> dict[str, str]:
+    """Classify each ad by type. Returns {ad_id: type} mapping."""
+    slim = [
+        {"ad_id": a.get("ad_id", ""), "headline": a.get("headline", ""), "cta": a.get("cta", "")}
+        for a in ads
+        if _is_real_copy(a.get("headline", "")) or _is_real_copy(a.get("primary_text", ""))
+    ][:40]
+    if not slim:
+        return {}
+    prompt = CLASSIFIER_PROMPT.format(ads_json=json.dumps(slim, indent=2))
+    result = await _call(prompt, "classifier", console)
+    classifications = []
+    if isinstance(result, list):
+        classifications = result
+    elif isinstance(result, dict):
+        for key in ("classifications", "ads", "results"):
+            if isinstance(result.get(key), list):
+                classifications = result[key]
+                break
+    return {c.get("ad_id", ""): c.get("type", "unknown") for c in classifications if c.get("ad_id")}
+
+
 async def _pass_voice(advertiser: str, ads: list[dict], console=None) -> dict:
     all_copy = [
         {
@@ -220,14 +304,13 @@ async def _pass_voice(advertiser: str, ads: list[dict], console=None) -> dict:
             "headline": a.get("headline", ""),
             "primary_text": a.get("primary_text", ""),
             "cta": a.get("cta", ""),
+            "visual_description": a.get("visual_description", ""),
         }
         for a in ads
         if _is_real_copy(a.get("headline", "")) or _is_real_copy(a.get("primary_text", ""))
-    ][:40]  # cap context size
-    platforms = {a["platform"] for a in ads}
+    ][:40]
     prompt = VOICE_PROMPT.format(
         advertiser=advertiser,
-        platform_count=len(platforms),
         total_ads=len(ads),
         all_copy_json=json.dumps(all_copy, indent=2),
     )
@@ -235,6 +318,36 @@ async def _pass_voice(advertiser: str, ads: list[dict], console=None) -> dict:
         console.print(f"  [dim]Pass 1/6 — Voice fingerprint ({len(all_copy)} copy samples)[/dim]")
     result = await _call(prompt, "voice_fingerprint", console)
     return result if isinstance(result, dict) else {}
+
+
+async def _pass_synthetic(advertiser: str, voice: dict, ads: list[dict], console=None) -> dict:
+    """Generate synthetic example ads in the brand's voice."""
+    sample_copy = [
+        {"headline": a.get("headline", ""), "primary_text": (a.get("primary_text") or "")[:200], "cta": a.get("cta", "")}
+        for a in ads
+        if _is_real_copy(a.get("headline", ""))
+    ][:10]
+    voice_summary = {
+        "headline_formula": voice.get("headline_formula", ""),
+        "signature_phrases": voice.get("signature_phrases", []),
+        "cta_patterns": voice.get("cta_patterns", []),
+        "what_they_never_say": voice.get("what_they_never_say", []),
+        "tone_descriptors": voice.get("tone_descriptors", []),
+        "by_type": voice.get("by_type", {}),
+    }
+    prompt = SYNTHETIC_PROMPT.format(
+        advertiser=advertiser,
+        n=3,
+        voice_summary=json.dumps(voice_summary, indent=2),
+        sample_copy=json.dumps(sample_copy, indent=2),
+        scenario="promoting their free CRM platform to small business owners",
+    )
+    if console:
+        console.print(f"  [dim]Pass 6/7 — Synthetic ad generator[/dim]")
+    result = await _call(prompt, "synthetic_ads", console)
+    if isinstance(result, dict) and isinstance(result.get("synthetic_ads"), list):
+        return result
+    return {"synthetic_ads": []}
 
 
 async def _pass_angles(advertiser: str, ads: list[dict], console=None) -> list[dict]:
@@ -383,6 +496,21 @@ async def run_all_passes(
             console.print(f"  [yellow]No ads for {advertiser} — skipping analysis[/yellow]")
         return {}
 
+    # Pass 0 — classify ad types before anything else
+    if console:
+        console.print(f"  [dim]Pass 0/7 — Ad type classifier[/dim]")
+    type_map = await _pass_classify(advertiser, client_ads, console)
+
+    # Attach type labels to ads in memory
+    for ad in client_ads:
+        ad["ad_type"] = type_map.get(ad.get("ad_id", ""), "unknown")
+
+    type_counts = {}
+    for t in type_map.values():
+        type_counts[t] = type_counts.get(t, 0) + 1
+    if console:
+        console.print(f"  [dim]  → {type_counts}[/dim]")
+
     # Competitor passes run concurrently with passes 1-4
     competitor_tasks = {
         name: asyncio.create_task(_analyze_competitor(name, ads))
@@ -391,8 +519,8 @@ async def run_all_passes(
     }
 
     # Passes 1-4 are independent
-    # Note: Ollama serializes requests internally when on a single GPU;
-    # asyncio.gather still works correctly — tasks just queue.
+    # Note: Ollama serializes requests internally on a single GPU;
+    # asyncio.gather queues tasks — still correct, just sequential in practice.
     voice, angles, funnel, visual = await asyncio.gather(
         _pass_voice(advertiser, client_ads, console),
         _pass_angles(advertiser, client_ads, console),
@@ -408,6 +536,7 @@ async def run_all_passes(
         "visual": visual,
         "ad_count": len(client_ads),
         "platforms": list({a["platform"] for a in client_ads}),
+        "type_distribution": type_counts,
     }
     structure = await _pass_structure(advertiser, aggregated, console)
 
@@ -417,6 +546,9 @@ async def run_all_passes(
 
     gaps = await _pass_gaps(advertiser, angles, funnel, competitor_analyses, console)
 
+    # Pass 6 — synthetic ad generator (needs voice from pass 1)
+    synthetic = await _pass_synthetic(advertiser, voice, client_ads, console)
+
     return {
         "voice": voice,
         "angles": angles,
@@ -424,4 +556,6 @@ async def run_all_passes(
         "visual": visual,
         "structure": structure,
         "gaps": gaps,
+        "synthetic": synthetic,
+        "type_distribution": type_counts,
     }

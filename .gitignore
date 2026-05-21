@@ -7,7 +7,7 @@ intelligence.db
 *.db
 
 # Generated outputs
-outputs/
+# outputs/  # committed for demo reference
 
 # Python
 .venv/

@@ -10,76 +10,82 @@ OLLAMA_HOST = os.environ.get("OLLAMA_HOST", "http://localhost:11434")
 MODEL = os.environ.get("OLLAMA_MODEL", "llama3.2")
 
 MARKDOWN_PROMPT = """\
-You are generating a brand advertising intelligence profile for an LLM that will \
-continue this company's advertising campaigns.
+You are generating a marketing preference model — a document that gives an LLM \
+everything it needs to continue {advertiser}'s advertising without breaking their voice.
 
-Goal: someone reading this file should be able to write new ads that are \
-indistinguishable from the company's existing work. Capture not just what they say \
-but how they say it. Cite actual phrases from the ads. Every claim must be grounded \
-in the data below. Avoid generic advice — if data is thin on a section, say so.
+Goal: someone reading this file should be able to write new {advertiser} ads that are \
+indistinguishable from their real ones. Cite actual phrases from the data. \
+If data is thin on a section, say so explicitly — do not invent.
 
 Client: {advertiser}
 Platforms analyzed: {platforms}
 Total ads analyzed: {total_ads}
+Ad type distribution: {type_distribution}
 Analysis date: {date}
 
-Voice fingerprint:
+Voice fingerprint data:
 {voice_json}
 
-Angle library:
+Ad type classification:
 {angles_json}
 
-Format and funnel mapping:
+Format and funnel data:
 {funnel_json}
 
-Visual patterns:
+Visual metadata:
 {visual_json}
 
-Campaign structure:
+Campaign structure inference:
 {structure_json}
 
-Competitive gap map:
-{gaps_json}
-
-Top ads by impression range:
+Top observed ads (by impression):
 {sample_ads_json}
 
 ---
 
 Write a markdown document with exactly these sections using ## headers:
 
-## Overview
-2-3 sentences on their advertising posture.
+## How to Use This Document
+2-3 sentences. This is a preference model, not a report. Explain that a reader \
+should start with Voice Fingerprint to understand tone, then go to the relevant \
+Ad Type section for the format they are writing.
 
-## Brand Voice Fingerprint
-How they write — specific enough to imitate. Cover sentence length, tone, recurring \
-constructions, what they never say.
+## Voice Fingerprint
+The single most important section. Must be specific enough to imitate. Cover:
+- Headline formula (the actual pattern, e.g. "Free [Product Name] — [Benefit]")
+- Sentence length and rhythm
+- 5-8 signature phrases or vocabulary patterns from the actual data
+- CTA constructions they use
+- What they never say (guardrails)
+Use > blockquotes for verbatim examples from the data.
 
-## Campaign Architecture
-How they structure campaigns and funnels. Which stages they invest in and why.
+## Ad Type: Form / Lead Gen
+Copy structure, observed examples, and the formula for writing a new one.
+If fewer than 3 examples in data, note that explicitly.
 
-## Format Playbook
-When they use each format and why. What formats they avoid and the implied logic.
+## Ad Type: Engagement / Brand
+Copy structure, observed examples, and the formula for writing a new one.
+If no examples in data, say "Insufficient data from this scrape."
 
-## Messaging Angle Library
-Every observed angle with examples from actual ads. Note which are primary vs. occasional.
+## Ad Type: Webinar / Event
+Copy structure, observed examples, and the formula for writing a new one.
+If no examples in data, say "Insufficient data from this scrape."
 
-## Visual Language Guide
-What their creative looks like — color signals, text-overlay habits, video style.
+## Visual Patterns
+What creatives look like — inferred from metadata and descriptions where available. \
+Label inferred vs. observed.
 
-## What Not To Do
-Patterns they consistently avoid. These guardrails are as important as the playbook.
+## Positioning Map
+How they frame their own value proposition. What problem they lead with. \
+What they call their product vs. what competitors might call it.
 
-## Competitive Position
-Where they're strong, where gaps exist, what angles competitors own that they don't.
+## Synthetic Ad Templates
+{synthetic_section}
 
-## Recommended Next Moves
-3-5 specific angles or formats to test next, each with a one-sentence rationale.
+## What We Don't Know Yet
+Data gaps, low-confidence sections, what additional scraping would improve this model.
 
-## Sample LLM Prompts
-3 ready-to-use prompts for generating on-brand ads at different campaign objectives.
-
-Write in third person (e.g. "Notion writes short declarative sentences"). \
+Write in third person (e.g. "{advertiser} leads with free tools"). \
 Use bullet points for lists. Use > blockquotes for direct ad copy examples."""
 
 
@@ -97,18 +103,25 @@ async def generate(
     angles = analysis.get("angles", [])
     angle_summary = _summarize_angles(angles)
 
+    type_distribution = analysis.get("type_distribution", {})
+    type_dist_str = ", ".join(f"{k}: {v}" for k, v in type_distribution.items()) or "not classified"
+
+    synthetic_ads = analysis.get("synthetic", {}).get("synthetic_ads", [])
+    synthetic_section = _build_synthetic_section(synthetic_ads)
+
     prompt = MARKDOWN_PROMPT.format(
         advertiser=advertiser,
         platforms=", ".join(platforms),
         total_ads=total_ads,
+        type_distribution=type_dist_str,
         date=date,
         voice_json=json.dumps(analysis.get("voice", {}), indent=2),
         angles_json=json.dumps(angle_summary, indent=2),
         funnel_json=json.dumps(analysis.get("funnel", {}), indent=2),
         visual_json=json.dumps(analysis.get("visual", {}), indent=2),
         structure_json=json.dumps(analysis.get("structure", {}), indent=2),
-        gaps_json=json.dumps(analysis.get("gaps", {}), indent=2),
         sample_ads_json=json.dumps(_slim_ads(sample_ads), indent=2),
+        synthetic_section=synthetic_section,
     )
 
     client = AsyncClient(host=OLLAMA_HOST)
@@ -118,9 +131,10 @@ async def generate(
             {
                 "role": "system",
                 "content": (
-                    "You are an expert advertising analyst writing a comprehensive brand "
-                    "intelligence report. Write detailed, specific, actionable markdown. "
-                    "Ground every claim in the data provided. Output markdown only — "
+                    "You are an expert advertising analyst writing a preference learning model — "
+                    "a document that gives an LLM everything it needs to continue a brand's "
+                    "advertising without breaking their voice. Write detailed, specific, actionable "
+                    "markdown. Ground every claim in the data provided. Output markdown only — "
                     "no JSON, no meta-commentary."
                 ),
             },
@@ -136,6 +150,27 @@ async def generate(
         "---\n\n"
     )
     return header + content
+
+
+def _build_synthetic_section(synthetic_ads: list[dict]) -> str:
+    if not synthetic_ads:
+        return "Insufficient data — re-run with more copy samples to generate synthetic ads."
+    lines = []
+    for i, ad in enumerate(synthetic_ads, 1):
+        ad_type = ad.get("type", "unknown").replace("_", " ").title()
+        lines.append(f"### Synthetic Ad {i} — {ad_type}")
+        if ad.get("headline"):
+            lines.append(f"**Headline:** {ad['headline']}")
+        if ad.get("primary_text"):
+            lines.append(f"> {ad['primary_text']}")
+        if ad.get("cta"):
+            lines.append(f"**CTA:** {ad['cta']}")
+        if ad.get("visual_description"):
+            lines.append(f"**Visual:** {ad['visual_description']}")
+        if ad.get("why_on_brand"):
+            lines.append(f"_Why on-brand: {ad['why_on_brand']}_")
+        lines.append("")
+    return "\n".join(lines).strip()
 
 
 def _summarize_angles(angles: list[dict]) -> dict:
