@@ -5,6 +5,23 @@ See CLAUDE.md for the logging format and rules.
 
 ---
 
+## 2026-05-21 — Replace Ollama markdown call with programmatic document builder
+
+**What changed:**
+- `generator/markdown.py` — complete rewrite. Removed Ollama API call and `MARKDOWN_PROMPT` template. Now builds the entire Brand DNA document in Python from structured analysis data. New helpers: `_voice_section()`, `_ad_type_section()`, `_visual_section()`, `_positioning_section()`, `_synthetic_section()`, `_gaps_section()`. `_slim_ads()` now includes `ad_type` field.
+- `main.py` — bumped `sample_ads` cap from 10 to 20 (more per-type examples in section builders); updated console message from "Calling Claude..." to "Building Brand DNA from analysis data..."
+
+**Why:** gemma4:e4b does not follow explicit section format instructions for long-form markdown generation. Every pipeline run produced a different document structure with generic consulting-speak and no citations from the actual data — defeating the entire purpose of a preference model. The model's structured JSON outputs from passes 1–6 already contain everything the document needs (headline formulas, signature phrases, CTA patterns, guardrails, per-type breakdowns, synthetic ads). Building from that data directly is faster, deterministic, and always grounded in observed evidence.
+
+**How it helps:** Document is now guaranteed to include verbatim examples, synthetic ad templates, per-type formulas, and data gap disclosures on every run. No model call in Phase 3 means no additional timeout risk and no hallucination in the output.
+
+**Traceback notes:**
+- `_ad_type_section()` filters `ads` by `ad_type == key` — this only works if `ad_type` is present on the ad dicts. It is set by `run_all_passes()` in `analysis/agent.py` (Pass 0 attaches `ad["ad_type"]` in memory). If Pass 0 fails or returns empty, all ads will have `ad_type = "unknown"` and per-type sections will show "Insufficient data."
+- The `_gaps_section()` uses `total_ads` (the full count) but `ads` is only the top-20 sample. Copy coverage note is therefore approximate.
+- `OLLAMA_HOST` and `MODEL` env vars remain imported for environment consistency but are unused in this module.
+
+---
+
 ## 2026-05-21 — Preference learning prompts: ad type classifier, voice reframe, synthetic generator
 
 **What changed:**

@@ -1,92 +1,12 @@
-"""Brand DNA markdown generator — single Ollama call."""
+"""Brand DNA markdown generator — builds document programmatically from structured analysis data."""
 
-import json
 import os
+from collections import Counter
 from datetime import date as _date
 
-from ollama import AsyncClient
-
+# Kept for environment consistency; no Ollama call is made in this module.
 OLLAMA_HOST = os.environ.get("OLLAMA_HOST", "http://localhost:11434")
 MODEL = os.environ.get("OLLAMA_MODEL", "llama3.2")
-
-MARKDOWN_PROMPT = """\
-You are generating a marketing preference model — a document that gives an LLM \
-everything it needs to continue {advertiser}'s advertising without breaking their voice.
-
-Goal: someone reading this file should be able to write new {advertiser} ads that are \
-indistinguishable from their real ones. Cite actual phrases from the data. \
-If data is thin on a section, say so explicitly — do not invent.
-
-Client: {advertiser}
-Platforms analyzed: {platforms}
-Total ads analyzed: {total_ads}
-Ad type distribution: {type_distribution}
-Analysis date: {date}
-
-Voice fingerprint data:
-{voice_json}
-
-Ad type classification:
-{angles_json}
-
-Format and funnel data:
-{funnel_json}
-
-Visual metadata:
-{visual_json}
-
-Campaign structure inference:
-{structure_json}
-
-Top observed ads (by impression):
-{sample_ads_json}
-
----
-
-Write a markdown document with exactly these sections using ## headers:
-
-## How to Use This Document
-2-3 sentences. This is a preference model, not a report. Explain that a reader \
-should start with Voice Fingerprint to understand tone, then go to the relevant \
-Ad Type section for the format they are writing.
-
-## Voice Fingerprint
-The single most important section. Must be specific enough to imitate. Cover:
-- Headline formula (the actual pattern, e.g. "Free [Product Name] — [Benefit]")
-- Sentence length and rhythm
-- 5-8 signature phrases or vocabulary patterns from the actual data
-- CTA constructions they use
-- What they never say (guardrails)
-Use > blockquotes for verbatim examples from the data.
-
-## Ad Type: Form / Lead Gen
-Copy structure, observed examples, and the formula for writing a new one.
-If fewer than 3 examples in data, note that explicitly.
-
-## Ad Type: Engagement / Brand
-Copy structure, observed examples, and the formula for writing a new one.
-If no examples in data, say "Insufficient data from this scrape."
-
-## Ad Type: Webinar / Event
-Copy structure, observed examples, and the formula for writing a new one.
-If no examples in data, say "Insufficient data from this scrape."
-
-## Visual Patterns
-What creatives look like — inferred from metadata and descriptions where available. \
-Label inferred vs. observed.
-
-## Positioning Map
-How they frame their own value proposition. What problem they lead with. \
-What they call their product vs. what competitors might call it.
-
-## Synthetic Ad Templates
-{synthetic_section}
-
-## What We Don't Know Yet
-Data gaps, low-confidence sections, what additional scraping would improve this model.
-
-Write in third person (e.g. "{advertiser} leads with free tools"). \
-Use bullet points for lists. Use > blockquotes for direct ad copy examples."""
 
 
 async def generate(
@@ -100,100 +20,315 @@ async def generate(
     if not date:
         date = _date.today().isoformat()
 
-    angles = analysis.get("angles", [])
-    angle_summary = _summarize_angles(angles)
-
-    type_distribution = analysis.get("type_distribution", {})
-    type_dist_str = ", ".join(f"{k}: {v}" for k, v in type_distribution.items()) or "not classified"
-
+    voice = analysis.get("voice", {})
     synthetic_ads = analysis.get("synthetic", {}).get("synthetic_ads", [])
-    synthetic_section = _build_synthetic_section(synthetic_ads)
+    type_distribution = analysis.get("type_distribution", {})
+    angles = analysis.get("angles", [])
+    funnel = analysis.get("funnel", {})
+    visual = analysis.get("visual", {})
+    structure = analysis.get("structure", {})
 
-    prompt = MARKDOWN_PROMPT.format(
-        advertiser=advertiser,
-        platforms=", ".join(platforms),
-        total_ads=total_ads,
-        type_distribution=type_dist_str,
-        date=date,
-        voice_json=json.dumps(analysis.get("voice", {}), indent=2),
-        angles_json=json.dumps(angle_summary, indent=2),
-        funnel_json=json.dumps(analysis.get("funnel", {}), indent=2),
-        visual_json=json.dumps(analysis.get("visual", {}), indent=2),
-        structure_json=json.dumps(analysis.get("structure", {}), indent=2),
-        sample_ads_json=json.dumps(_slim_ads(sample_ads), indent=2),
-        synthetic_section=synthetic_section,
+    type_dist_str = (
+        ", ".join(f"{k.replace('_', ' ')}: {v}" for k, v in type_distribution.items())
+        or "not classified"
     )
 
-    client = AsyncClient(host=OLLAMA_HOST)
-    response = await client.chat(
-        model=MODEL,
-        messages=[
-            {
-                "role": "system",
-                "content": (
-                    "You are an expert advertising analyst writing a preference learning model — "
-                    "a document that gives an LLM everything it needs to continue a brand's "
-                    "advertising without breaking their voice. Write detailed, specific, actionable "
-                    "markdown. Ground every claim in the data provided. Output markdown only — "
-                    "no JSON, no meta-commentary."
-                ),
-            },
-            {"role": "user", "content": prompt},
-        ],
-        options={"temperature": 0.3, "num_predict": 4096},
-    )
+    slimmed = _slim_ads(sample_ads)
 
-    content = (response.message.content or "").strip()
-    header = (
-        f"# {advertiser} — Advertising Brand DNA\n"
-        f"_Generated {date} · {total_ads} ads analyzed across {', '.join(platforms)}_\n\n"
-        "---\n\n"
-    )
-    return header + content
+    parts = [
+        (
+            f"# {advertiser} — Advertising Brand DNA\n"
+            f"_Generated {date} · {total_ads} ads analyzed across {', '.join(platforms)} · "
+            f"Ad type distribution: {type_dist_str}_\n\n"
+            "---"
+        ),
+        (
+            "## How to Use This Document\n\n"
+            f"This is a preference model, not a report. "
+            f"Start with **Voice Fingerprint** to internalize {advertiser}'s tone and vocabulary before writing anything. "
+            f"Then go to the relevant **Ad Type** section for the format you're producing. "
+            f"The **Synthetic Ad Templates** section shows example ads generated from this fingerprint — "
+            f"use them as a gut-check that your copy sounds like {advertiser}."
+        ),
+        _voice_section(advertiser, voice, slimmed),
+        _ad_type_section("Form / Lead Gen", "form_lead_gen", voice, type_distribution, slimmed),
+        _ad_type_section("Engagement / Brand", "engagement_brand", voice, type_distribution, slimmed),
+        _ad_type_section("Webinar / Event", "webinar_event", voice, type_distribution, slimmed),
+        _visual_section(visual),
+        _positioning_section(advertiser, structure, angles, funnel),
+        _synthetic_section(advertiser, synthetic_ads),
+        _gaps_section(type_distribution, total_ads, slimmed),
+    ]
+
+    return "\n\n".join(parts)
 
 
-def _build_synthetic_section(synthetic_ads: list[dict]) -> str:
+# ---------------------------------------------------------------------------
+# Section builders
+# ---------------------------------------------------------------------------
+
+def _voice_section(advertiser: str, voice: dict, ads: list[dict]) -> str:
+    lines = ["## Voice Fingerprint"]
+
+    formula = voice.get("headline_formula", "")
+    if formula:
+        lines.append(f"\n**Headline formula:** `{formula}`")
+
+    avg_len = voice.get("avg_sentence_length")
+    tone = voice.get("tone_descriptors", [])
+    vocab = voice.get("vocabulary_level", "")
+    rhythm_parts = []
+    if avg_len:
+        rhythm_parts.append(f"~{avg_len}-word sentences")
+    if tone:
+        rhythm_parts.append(f"tone: {', '.join(tone)}")
+    if vocab:
+        rhythm_parts.append(f"vocabulary: {vocab}")
+    if rhythm_parts:
+        lines.append(f"\n**Rhythm and tone:** {'; '.join(rhythm_parts)}.")
+
+    opening = voice.get("opening_hook_pattern", "")
+    if opening:
+        lines.append(f"\n**Opening hook pattern:** {opening}")
+
+    sig = voice.get("signature_phrases", [])
+    if sig:
+        lines.append("\n**Signature phrases — use these to sound on-brand:**")
+        for p in sig:
+            lines.append(f"- {p}")
+
+    ctas = voice.get("cta_patterns", [])
+    if ctas:
+        lines.append("\n**CTA constructions:**")
+        for c in ctas:
+            lines.append(f"- `{c}`")
+
+    never = voice.get("what_they_never_say", [])
+    if never:
+        lines.append("\n**What they never say (guardrails):**")
+        for n in never:
+            lines.append(f"- {n}")
+
+    real = [a for a in ads if (a.get("headline") or "").strip()][:8]
+    if real:
+        lines.append("\n**Verbatim headlines from the data:**")
+        for ad in real:
+            hl = (ad.get("headline") or "").strip()
+            cta = (ad.get("cta") or "").strip()
+            line = f"> {hl}"
+            if cta:
+                line += f"  _({cta})_"
+            lines.append(line)
+
+    return "\n".join(lines)
+
+
+def _ad_type_section(title: str, key: str, voice: dict, type_dist: dict, ads: list[dict]) -> str:
+    count = type_dist.get(key, 0)
+    lines = [f"## Ad Type: {title}"]
+
+    if count == 0:
+        lines.append("\nInsufficient data from this scrape.")
+        return "\n".join(lines)
+
+    if count < 3:
+        lines.append(f"\n_Note: only {count} example(s) classified as this type — patterns are low-confidence._")
+
+    by_type = voice.get("by_type", {}).get(key, {})
+    pattern = by_type.get("headline_pattern", "")
+    example = by_type.get("example_headline", "")
+
+    if pattern:
+        lines.append(f"\n**Headline formula:** `{pattern}`")
+
+    if example:
+        lines.append(f"\n**Example from the data:**\n> {example}")
+
+    type_ads = [a for a in ads if a.get("ad_type") == key and (a.get("headline") or "").strip()][:4]
+    if type_ads:
+        lines.append("\n**Observed ads:**")
+        for ad in type_ads:
+            hl = (ad.get("headline") or "").strip()
+            pt = (ad.get("primary_text") or "").strip()[:150]
+            cta = (ad.get("cta") or "").strip()
+            lines.append(f"> **{hl}**")
+            if pt:
+                lines.append(f"> {pt}")
+            if cta:
+                lines.append(f"> _{cta}_")
+            lines.append(">")
+
+    lines.append("\n**Formula for writing a new ad of this type:**")
+    if pattern:
+        lines.append(f"1. Headline: `{pattern}`")
+    ctas = voice.get("cta_patterns", [])
+    if ctas:
+        lines.append(f"2. CTA: choose from {', '.join(f'`{c}`' for c in ctas[:3])}")
+    never = voice.get("what_they_never_say", [])
+    if never:
+        lines.append(f"3. Avoid: {'; '.join(never[:3])}")
+
+    return "\n".join(lines)
+
+
+def _visual_section(visual: dict) -> str:
+    lines = ["## Visual Patterns"]
+
+    style = visual.get("dominant_visual_style", "")
+    if style:
+        lines.append(f"\n**Dominant style _(inferred)_:** {style}")
+
+    patterns = visual.get("image_content_patterns", [])
+    if patterns:
+        lines.append("\n**Image content patterns _(inferred from format metadata)_:**")
+        for p in patterns:
+            lines.append(f"- {p}")
+
+    text_overlay = visual.get("text_overlay_usage", "")
+    if text_overlay:
+        lines.append(f"\n**Text overlay usage:** {text_overlay}")
+
+    colors = visual.get("color_palette_signals", [])
+    if colors:
+        lines.append("\n**Color palette signals:**")
+        for c in colors:
+            lines.append(f"- {c}")
+
+    video = visual.get("video_style")
+    if video and str(video).lower() not in ("null", "none", ""):
+        lines.append(f"\n**Video style:** {video}")
+
+    score = visual.get("visual_consistency_score")
+    if score is not None:
+        lines.append(f"\n**Visual consistency score:** {score:.1f}/1.0")
+
+    if not any([style, patterns, text_overlay, colors]):
+        lines.append(
+            "\nInsufficient visual metadata — Google display ads do not expose creative descriptions. "
+            "Add Meta or LinkedIn to get actual visual data."
+        )
+
+    return "\n".join(lines)
+
+
+def _positioning_section(advertiser: str, structure: dict, angles: list[dict], funnel: dict) -> str:
+    lines = ["## Positioning Map"]
+
+    funnel_approach = structure.get("funnel_approach", "")
+    if funnel_approach:
+        lines.append(f"\n**Funnel approach:** {funnel_approach}")
+
+    campaign_types = structure.get("campaign_types_observed", [])
+    if campaign_types:
+        lines.append("\n**Campaign types observed:**")
+        for t in campaign_types:
+            lines.append(f"- {t}")
+
+    testing = structure.get("testing_behavior", "")
+    if testing:
+        lines.append(f"\n**Testing behavior:** {testing}")
+
+    if angles:
+        angle_counts = Counter(a.get("angle", "unknown") for a in angles)
+        top_angles = angle_counts.most_common(5)
+        lines.append("\n**Top messaging angles (by frequency):**")
+        for angle, count in top_angles:
+            lines.append(f"- {angle.replace('_', ' ')}: {count} ads")
+
+    funnel_dist = funnel.get("funnel_distribution", {})
+    if funnel_dist:
+        lines.append("\n**Funnel stage distribution:**")
+        for stage, count in funnel_dist.items():
+            lines.append(f"- {stage}: {count} ads")
+
+    platform_strategy = structure.get("platform_strategy", {})
+    google_strat = platform_strategy.get("google", "")
+    if google_strat:
+        lines.append(f"\n**Google strategy:** {google_strat}")
+
+    return "\n".join(lines)
+
+
+def _synthetic_section(advertiser: str, synthetic_ads: list[dict]) -> str:
+    lines = ["## Synthetic Ad Templates"]
+
     if not synthetic_ads:
-        return "Insufficient data — re-run with more copy samples to generate synthetic ads."
-    lines = []
+        lines.append(
+            "\nInsufficient data — re-run with more copy samples to generate synthetic ads."
+        )
+        return "\n".join(lines)
+
+    lines.append(
+        f"\n_{len(synthetic_ads)} ads generated in {advertiser}'s voice from the fingerprint above. "
+        f"Use these to calibrate new copy before publishing._"
+    )
+
     for i, ad in enumerate(synthetic_ads, 1):
-        ad_type = ad.get("type", "unknown").replace("_", " ").title()
-        lines.append(f"### Synthetic Ad {i} — {ad_type}")
-        if ad.get("headline"):
-            lines.append(f"**Headline:** {ad['headline']}")
-        if ad.get("primary_text"):
-            lines.append(f"> {ad['primary_text']}")
-        if ad.get("cta"):
-            lines.append(f"**CTA:** {ad['cta']}")
-        if ad.get("visual_description"):
-            lines.append(f"**Visual:** {ad['visual_description']}")
-        if ad.get("why_on_brand"):
-            lines.append(f"_Why on-brand: {ad['why_on_brand']}_")
-        lines.append("")
-    return "\n".join(lines).strip()
+        ad_type = (ad.get("type") or "unknown").replace("_", " ").title()
+        hl = (ad.get("headline") or "").strip()
+        pt = (ad.get("primary_text") or "").strip()
+        cta = (ad.get("cta") or "").strip()
+        visual = (ad.get("visual_description") or "").strip()
+        why = (ad.get("why_on_brand") or "").strip()
+
+        lines.append(f"\n### Template {i} — {ad_type}")
+        if hl:
+            lines.append(f"**Headline:** {hl}")
+        if pt:
+            lines.append(f"> {pt}")
+        if cta:
+            lines.append(f"**CTA:** `{cta}`")
+        if visual:
+            lines.append(f"**Visual:** _{visual}_")
+        if why:
+            lines.append(f"_Voice pattern: {why}_")
+
+    return "\n".join(lines)
 
 
-def _summarize_angles(angles: list[dict]) -> dict:
-    dist: dict[str, list] = {}
-    for item in angles:
-        angle = item.get("angle", "unknown")
-        if angle not in dist:
-            dist[angle] = []
-        dist[angle].append({
-            "ad_id": item.get("ad_id", ""),
-            "reasoning": item.get("reasoning", ""),
-            "confidence": item.get("confidence", 0),
-        })
-    total = max(len(angles), 1)
-    return {
-        angle: {
-            "count": len(examples),
-            "percentage": round(len(examples) / total * 100, 1),
-            "sample_reasoning": examples[0]["reasoning"] if examples else "",
-        }
-        for angle, examples in sorted(dist.items(), key=lambda x: len(x[1]), reverse=True)
-    }
+def _gaps_section(type_dist: dict, total_ads: int, ads: list[dict]) -> str:
+    lines = ["## What We Don't Know Yet"]
 
+    lines.append(
+        f"\n**Copy coverage:** vision extraction yielded readable copy for a subset of "
+        f"{total_ads} scraped ads. Analysis quality scales with copy coverage."
+    )
+
+    unknown_count = type_dist.get("unknown", 0)
+    if unknown_count:
+        lines.append(
+            f"- {unknown_count} ads could not be type-classified — "
+            "more vision coverage would reduce this."
+        )
+
+    if not type_dist.get("webinar_event"):
+        lines.append(
+            "- No webinar/event ads in this dataset — HubSpot may not run them on Google, "
+            "or they weren't in this scrape window."
+        )
+
+    engagement_count = type_dist.get("engagement_brand", 0)
+    if engagement_count < 3:
+        lines.append(
+            f"- Only {engagement_count} engagement/brand ad(s) observed. "
+            "Google skews toward direct response — add Meta or LinkedIn for awareness patterns."
+        )
+
+    lines.append(
+        "- This scrape covers Google only. Meta adds video/carousel formats; "
+        "LinkedIn adds job-title-targeted copy patterns."
+    )
+    lines.append(
+        "- No competitor data included. Adding competitors would surface white-space angles "
+        "and reveal what HubSpot is deliberately not saying."
+    )
+
+    return "\n".join(lines)
+
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
 
 def _slim_ads(ads: list[dict]) -> list[dict]:
     return [
@@ -204,6 +339,7 @@ def _slim_ads(ads: list[dict]) -> list[dict]:
             "primary_text": (a.get("primary_text") or "")[:300],
             "cta": a.get("cta", ""),
             "impressions_range": a.get("impressions_range", ""),
+            "ad_type": a.get("ad_type", "unknown"),
         }
         for a in ads
     ]

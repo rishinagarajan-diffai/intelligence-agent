@@ -260,14 +260,14 @@ async def run(advertiser: str, competitors: list[str], platforms: list[str]) -> 
         client_ads,
         key=lambda a: _parse_impressions(a.get("impressions_range")),
         reverse=True,
-    )[:10]
+    )[:20]
 
     today = date.today().isoformat()
     slug = advertiser.lower().replace(" ", "-").replace(".", "")
     output_path = Path("outputs") / f"{slug}-brand-dna-{today}.md"
     output_path.parent.mkdir(exist_ok=True)
 
-    console.print(f"Calling Claude to synthesize brand DNA...")
+    console.print(f"  Building Brand DNA from analysis data...")
     content = await md_generator.generate(
         advertiser, platforms, total_client, analysis, sample_ads, date=today
     )

@@ -1,56 +1,176 @@
 # HubSpot — Advertising Brand DNA
-_Generated 2026-05-21 · 100 ads analyzed across google_
+_Generated 2026-05-21 · 100 ads analyzed across google · Ad type distribution: engagement brand: 5, unknown: 1, form lead gen: 7_
 
 ---
 
-## Overview
-HubSpot maintains an advertising posture that is highly educational, value-driven, and structured across the entire marketing funnel. The strategy prioritizes low-friction, high-value entry points (free tools and courses) to capture leads before guiding them toward core platform adoption. The overall approach is authoritative, positioning HubSpot as a comprehensive, professional partner for business growth.
+## How to Use This Document
 
-## Brand Voice Fingerprint
-The brand voice is consistently authoritative, educational, and helpful, maintaining a professional and action-oriented tone.
+This is a preference model, not a report. Start with **Voice Fingerprint** to internalize HubSpot's tone and vocabulary before writing anything. Then go to the relevant **Ad Type** section for the format you're producing. The **Synthetic Ad Templates** section shows example ads generated from this fingerprint — use them as a gut-check that your copy sounds like HubSpot.
 
-*   **Rhythm and Length:** The average sentence length is approximately 14 words, suggesting detailed, explanatory copy rather than short, punchy slogans.
-*   **Tone and Persona:** The tone is consistently professional and helpful, focusing on solving complex business problems.
-*   **Key Vocabulary:** The copy frequently uses recurring phrases such as:
-    *   "generate leads, close deals"
-    *   "free"
-    *   "streamline your work"
-*   **Structural Patterns:** The language emphasizes utility and process improvement. Examples include: "Use [tool] to [achieve benefit]" or "Improve [area] by [action]."
-*   **What to Avoid:** Overly casual or hyperbolic language. The tone remains professional and authoritative.
+## Voice Fingerprint
 
-## Campaign Structure
+**Headline formula:** `Free [Tool/Resource] - [Benefit/Action]`
 
-### Funnel Strategy
-The campaign structure follows a clear progression:
-1.  **Top Funnel (Awareness):** Offering free, educational resources (e.g., "Take advantage of our guides").
-2.  **Middle Funnel (Consideration):** Highlighting specific, free tools or features (e.g., "Try our free email template generator").
-3.  **Bottom Funnel (Decision):** Direct calls to action for full platform adoption (e.g., "Start your free trial today").
+**Rhythm and tone:** ~12-word sentences; tone: authoritative, helpful, professional, optimistic; vocabulary: mixed.
 
-### Key Data Points
-*   **Primary Goal:** Lead generation and platform adoption.
-*   **Most Effective CTA:** "Start your free trial" or "Learn more."
-*   **Best Performing Content:** Educational guides and free tools.
+**Opening hook pattern:** Benefit claim (e.g., 'Close More Deals') or Free Offer (e.g., 'Free SEO Course')
 
-## Visual Identity
+**Signature phrases — use these to sound on-brand:**
+- generate leads
+- close deals
+- grow your business
+- remarkable customer experiences
+- free
 
-*   **Color Palette:** Professional blues, whites, and grays.
-*   **Imagery:** Clean, modern, and process-oriented graphics. Avoid stock photos of people shaking hands; focus on clean UI mockups or abstract representations of efficiency.
-*   **Tone:** Trustworthy, knowledgeable, and helpful.
+**CTA constructions:**
+- `Download Now`
+- `Learn how to grow your business with a demo of HubSpot's software.`
 
-## Key Takeaways
+**What they never say (guardrails):**
+- revolutionary
+- game-changer
+- synergy
+- paradigm shift
+- best-in-class
 
-*   **Focus on Value:** Always lead with the value proposition before the product name.
-*   **Consistency:** Maintain a consistent, professional, and educational tone across all channels.
-*   **Data-Driven:** Use data points (e.g., "Increase efficiency by 30%") to back up claims.
+**Verbatim headlines from the data:**
+> Free Email Signature Generator - Built for Your Business
+> Free Email Tracking Software - HubSpot Email Tracking
+> Free Email Tracking Software - HubSpot Email Tracking
+> Free Appointment Scheduling - Schedule. Meet. Close.
+> HubSpot CRM Platform - Simplify Your Processes
+> Free Email Signature Generator
+> Free Email Signature Generator
+> Free SEO Course by HubSpot
 
-## Recommendations
+## Ad Type: Form / Lead Gen
 
-*   **Test New Channels:** Explore LinkedIn advertising for B2B lead generation.
-*   **Optimize Landing Pages:** Ensure every ad leads to a highly optimized landing page that reinforces the ad's promise.
-*   **Develop Case Studies:** Create detailed case studies showing measurable ROI for key features.
+**Headline formula:** `Free [Resource] - [Action/Benefit]`
 
-## Action Items
+**Example from the data:**
+> Free Business Plan Template - Download Now
 
-*   **Review Ad Copy:** Update all ad copy to incorporate more specific, measurable benefits.
-*   **Create New Assets:** Develop 3 new educational assets (guides/templates) for the next quarter.
-*   **Analyze Funnel Drop-off:** Deep dive into the analytics to identify the biggest drop-off point between ad click and sign-up.
+**Observed ads:**
+> **Free Email Signature Generator - Built for Your Business**
+> Use this free tool to build a remarkable email signature for your team.
+>
+> **Free Email Tracking Software - HubSpot Email Tracking**
+> Get started with HubSpot's free email tracking to follow up with your leads quickly. Use the free email integration with HubSpot...
+>
+> **Free Email Tracking Software - HubSpot Email Tracking**
+> Get started with HubSpot's free email tracking to follow up with your leads quickly. Use the free email integration with HubSpot...
+>
+> **Free Appointment Scheduling - Schedule. Meet. Close.**
+> Use HubSpot's appointment scheduler to easily connect with your team and prospects. Save time from...
+>
+
+**Formula for writing a new ad of this type:**
+1. Headline: `Free [Resource] - [Action/Benefit]`
+2. CTA: choose from `Download Now`, `Learn how to grow your business with a demo of HubSpot's software.`
+3. Avoid: revolutionary; game-changer; synergy
+
+## Ad Type: Engagement / Brand
+
+**Headline formula:** `HubSpot [Product] - [Benefit]`
+
+**Example from the data:**
+> HubSpot CRM for Small Business - Close More Deals
+
+**Observed ads:**
+> **HubSpot CRM Platform - Simplify Your Processes**
+> Generate leads, close deals, and create remarkable customer experiences. Learn how to grow your business...
+>
+> **HubSpot CRM Platform - Simplify Your Processes**
+> Generate leads, close deals, and create remarkable customer experiences. Learn how to grow your business with a demo of HubSpot's software.
+>
+> **HubSpot CRM Platform - Simplify Your Processes**
+> Generate leads, close deals, and create remarkable customer experiences. Learn how to grow your business with a demo of HubSpot's software.
+>
+> **HubSpot Free CRM Software - Convert More Leads**
+> Use AI-powered tools to streamline your work, align your teams and grow your business. See How HubSpot Smart CRM can work for your...
+>
+
+**Formula for writing a new ad of this type:**
+1. Headline: `HubSpot [Product] - [Benefit]`
+2. CTA: choose from `Download Now`, `Learn how to grow your business with a demo of HubSpot's software.`
+3. Avoid: revolutionary; game-changer; synergy
+
+## Ad Type: Webinar / Event
+
+Insufficient data from this scrape.
+
+## Visual Patterns
+
+**Dominant style _(inferred)_:** Clean, professional, and corporate, utilizing product screenshots and abstract business concepts.
+
+**Image content patterns _(inferred from format metadata)_:**
+- Product/Software UI screenshots (CRM dashboards, forms, etc.)
+- Abstract graphics representing growth, connection, or data flow
+- Minimalist illustrations of business concepts (e.g., funnel, connection)
+- Text-heavy graphics with clear calls to action
+
+**Text overlay usage:** moderate
+
+**Color palette signals:**
+- Blue (primary, trust, technology)
+- White/Light Gray (background, cleanliness)
+- Accent colors (e.g., green or orange for CTAs/highlights)
+
+**Visual consistency score:** 0.8/1.0
+
+## Positioning Map
+
+**Funnel approach:** Full-funnel, but heavily weighted towards TOFU (Lead Generation) and MOFU (Consideration/Demo).
+
+**Campaign types observed:**
+- Lead Generation (Free Tools/Templates)
+- Thought Leadership (Educational Content)
+- Product Demonstration (Demo/Solution Focus)
+- Outcome-Based (Benefit/Result Focus)
+
+**Testing behavior:** High focus on testing various 'free' entry points (templates, courses, tools) and outcome claims, suggesting continuous A/B testing of initial hooks and lead magnets.
+
+**Top messaging angles (by frequency):**
+- outcome led: 7 ads
+- free trial: 7 ads
+- thought leadership: 4 ads
+- product demo: 2 ads
+
+**Funnel stage distribution:**
+- TOFU: 6 ads
+- MOFU: 7 ads
+- BOFU: 2 ads
+
+**Google strategy:** Primary focus, utilizing a mix of lead-gen and educational content.
+
+## Synthetic Ad Templates
+
+_3 ads generated in HubSpot's voice from the fingerprint above. Use these to calibrate new copy before publishing._
+
+### Template 1 — Engagement Brand
+**Headline:** HubSpot CRM for Small Business - Close More Deals
+> Generate leads, close deals, and create remarkable customer experiences. Learn how to grow your business with a demo of HubSpot's software.
+**CTA:** `Learn how to grow your business with a demo of HubSpot's software.`
+**Visual:** _A clean, professional graphic showing a small team collaborating around a digital dashboard._
+_Voice pattern: Follows the 'engagement_brand' pattern, using signature phrases like 'generate leads', 'close deals', and 'grow your business' while maintaining an authoritative and helpful tone._
+
+### Template 2 — Form Lead Gen
+**Headline:** Free CRM Platform - Simplify Your Processes
+> Organize, monitor, and sell easily. Start generating leads and building remarkable customer experiences with HubSpot's free tools.
+**CTA:** `Download Now`
+**Visual:** _A simple, clean image of a laptop displaying the HubSpot CRM dashboard._
+_Voice pattern: Follows the 'form_lead_gen' pattern by offering a 'Free' resource and using the 'Download Now' CTA, while incorporating core vocabulary like 'generate leads' and 'remarkable customer experiences'._
+
+### Template 3 — Engagement Brand
+**Headline:** HubSpot CRM Platform - Grow Your Business
+> Use AI-powered tools to streamline your work and align your teams. Generate leads and close deals to grow your business.
+**Visual:** _A professional, optimistic image of a small business owner looking confidently at a growth chart._
+_Voice pattern: Follows the 'engagement_brand' pattern, focusing on the core product and benefit ('Grow Your Business'), and using signature phrases like 'generate leads', 'close deals', and 'grow your business' in an authoritative and helpful tone._
+
+## What We Don't Know Yet
+
+**Copy coverage:** vision extraction yielded readable copy for a subset of 100 scraped ads. Analysis quality scales with copy coverage.
+- 1 ads could not be type-classified — more vision coverage would reduce this.
+- No webinar/event ads in this dataset — HubSpot may not run them on Google, or they weren't in this scrape window.
+- This scrape covers Google only. Meta adds video/carousel formats; LinkedIn adds job-title-targeted copy patterns.
+- No competitor data included. Adding competitors would surface white-space angles and reveal what HubSpot is deliberately not saying.
