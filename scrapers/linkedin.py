@@ -1,8 +1,9 @@
-"""LinkedIn Ad Library scraper — Playwright-only (no public API).
+"""LinkedIn Ad Library scraper — form-based Playwright scraper.
 
-LinkedIn blocks unauthenticated API calls, so we use headless browsing.
-Company IDs are required; pass them via LINKEDIN_COMPANY_IDS env var or the
-hardcoded lookup table below.
+LinkedIn's Ad Library at linkedin.com/ad-library is publicly accessible
+without authentication. Results are server-rendered after form submission;
+the companyIds URL param alone returns empty results — the accountOwner
+text param triggers the actual search.
 """
 
 import os
@@ -19,17 +20,23 @@ _KNOWN_IDS: dict[str, str] = {
     "airtable": "3949382",
     "asana": "1419599",
     "clickup": "18416836",
+    "hubspot": "1467",
+    "salesforce": "1049",
+    "zendesk": "1116",
+    "intercom": "697989",
+    "drift": "3911126",
 }
 
 _UA = (
     "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
     "AppleWebKit/537.36 (KHTML, like Gecko) "
-    "Chrome/120.0.0.0 Safari/537.36"
+    "Chrome/124.0.0.0 Safari/537.36"
 )
+
+_BASE_URL = "https://www.linkedin.com/ad-library"
 
 
 def resolve_company_id(advertiser: str) -> str | None:
-    """Return LinkedIn company ID from env override or built-in table."""
     env_map = _parse_env_ids()
     key = advertiser.lower().strip()
     return env_map.get(key) or _KNOWN_IDS.get(key)
@@ -52,226 +59,173 @@ def scrape(company_id: str, advertiser: str, limit: int = 50) -> list[dict]:
     except ImportError:
         return []
 
-    url = f"https://www.linkedin.com/ad-library/search?companyIds={company_id}"
     ads: list[dict] = []
 
     with sync_playwright() as pw:
-        browser = pw.chromium.launch(headless=True)
-        context = browser.new_context(user_agent=_UA)
+        browser = pw.chromium.launch(
+            headless=True,
+            args=["--disable-blink-features=AutomationControlled"],
+        )
+        context = browser.new_context(
+            user_agent=_UA,
+            viewport={"width": 1280, "height": 800},
+        )
+        context.add_init_script(
+            "Object.defineProperty(navigator, 'webdriver', {get: () => undefined})"
+        )
         page = context.new_page()
 
-        intercepted: list[dict] = []
-
-        def handle_response(response):
-            if "ad-library" in response.url and response.status == 200:
-                try:
-                    body = response.json()
-                    _walk_json(body, intercepted)
-                except Exception:
-                    pass
-
-        page.on("response", handle_response)
-
         try:
-            page.goto(url, timeout=30_000, wait_until="networkidle")
-            page.wait_for_selector(".ad-library-card, [data-test-id='ad-card']", timeout=15_000)
+            page.goto(f"{_BASE_URL}/search", timeout=30_000, wait_until="networkidle")
+            page.wait_for_timeout(1500)
+
+            # Fill the company/advertiser name field and submit
+            inp = page.query_selector('[name="accountOwner"]')
+            if not inp:
+                browser.close()
+                return []
+
+            inp.focus()
+            page.keyboard.type(advertiser, delay=100)
+            page.keyboard.press("Enter")
+            page.wait_for_timeout(5000)
+
+            # Collect ads from current page and scroll for more
+            seen_ids: set[str] = set()
+            scroll_attempts = 0
+            max_scrolls = max(1, limit // 24)
+
+            while len(ads) < limit and scroll_attempts <= max_scrolls:
+                cards = page.query_selector_all(".ad-preview")
+
+                # Scroll each card into view to trigger lazy image loading
+                for card in cards:
+                    card.scroll_into_view_if_needed()
+                page.wait_for_timeout(1000)
+
+                for card in cards:
+                    ad = _parse_card(card, advertiser)
+                    if ad and ad["ad_id"] not in seen_ids:
+                        seen_ids.add(ad["ad_id"])
+                        ads.append(ad)
+
+                if len(ads) >= limit:
+                    break
+
+                # Scroll to load more
+                prev_count = len(seen_ids)
+                page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
+                page.wait_for_timeout(2500)
+                scroll_attempts += 1
+
+                # Stop if no new ads loaded
+                if len(seen_ids) == prev_count and scroll_attempts > 1:
+                    break
+
         except PwTimeout:
             pass
-
-        if intercepted:
-            ads = [_normalize_api(a, advertiser) for a in intercepted][:limit]
-        else:
-            ads = _parse_dom(page, advertiser, limit)
-
-        # Scroll to load more if needed
-        if len(ads) < limit:
-            try:
-                for _ in range(3):
-                    page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
-                    page.wait_for_timeout(1500)
-                    new_cards = _parse_dom(page, advertiser, limit)
-                    if len(new_cards) > len(ads):
-                        ads = new_cards
-                    else:
-                        break
-            except Exception:
-                pass
-
-        browser.close()
+        except Exception:
+            pass
+        finally:
+            browser.close()
 
     return ads[:limit]
 
 
-def _walk_json(obj, out: list) -> None:
-    """Recursively find ad objects in JSON response."""
-    if isinstance(obj, list):
-        for item in obj:
-            _walk_json(item, out)
-    elif isinstance(obj, dict):
-        if any(k in obj for k in ("headline", "introductoryText", "adCardType")):
-            out.append(obj)
-        else:
-            for v in obj.values():
-                _walk_json(v, out)
+def _parse_card(card, advertiser: str) -> dict | None:
+    try:
+        container = card.query_selector(".base-ad-preview-card")
+        if not container:
+            return None
+
+        # Ad ID from detail link
+        detail_link = container.query_selector("a[href*='/ad-library/detail/']")
+        ad_id = ""
+        if detail_link:
+            href = detail_link.get_attribute("href") or ""
+            m = re.search(r"/ad-library/detail/(\d+)", href)
+            if m:
+                ad_id = m.group(1)
+        if not ad_id:
+            return None
+
+        # Format from aria-label: "HubSpot, Single Image Ad, View details"
+        aria = container.get_attribute("aria-label") or ""
+        fmt = _parse_format(aria)
+
+        # Body copy from commentary
+        commentary = container.query_selector(".commentary__content")
+        primary_text = (commentary.inner_text() or "").strip() if commentary else ""
+
+        # Headline — LinkedIn doesn't expose it directly in the card;
+        # for thought-leadership ads it's the commenter's description.
+        # We use the creative's alt text or leave blank for vision extraction.
+        headline = _extract_headline(container)
+
+        # Image / video URL — search from the full card, not just the inner container
+        img = card.query_selector(".ad-preview__dynamic-dimensions-image")
+        image_url = None
+        img_alt = ""
+        if img:
+            image_url = img.get_attribute("src") or img.get_attribute("data-src") or None
+            img_alt = (img.get_attribute("alt") or "").strip()
+            if not image_url:
+                image_url = None  # genuinely not loaded
+
+        # Use image alt text as headline supplement when no other headline
+        if img_alt and not headline:
+            headline = img_alt
+
+        # Video indicator
+        video_url = None
+        if "video" in fmt.lower():
+            video_url = image_url
+            image_url = None
+
+        return {
+            "platform": "linkedin",
+            "advertiser": advertiser,
+            "ad_id": f"LI{ad_id}",
+            "format": fmt,
+            "headline": headline,
+            "primary_text": primary_text,
+            "description": None,
+            "cta": None,
+            "image_url": image_url,
+            "video_url": video_url,
+            "start_date": None,
+            "end_date": None,
+            "impressions_range": None,
+            "scraped_at": datetime.utcnow().isoformat(),
+        }
+    except Exception:
+        return None
 
 
-def _parse_dom(page, advertiser: str, limit: int) -> list[dict]:
-    selectors = [".ad-library-card", "[data-test-id='ad-card']", "[class*='AdCard']"]
-    cards = []
-    for sel in selectors:
-        cards = page.query_selector_all(sel)
-        if cards:
-            break
-
-    ads = []
-    for card in cards[:limit]:
-        try:
-            headline = _text(card, [
-                ".ad-library-card__headline",
-                "[data-test-id='headline']",
-                "h3", ".headline",
-            ])
-            body = _text(card, [
-                ".ad-library-card__introductory-text",
-                "[data-test-id='introductory-text']",
-                ".body-copy", "p",
-            ])
-            cta = _text(card, [
-                ".ad-library-card__cta",
-                "[data-test-id='cta']",
-                "button", ".cta",
-            ])
-            date_text = _text(card, [
-                ".ad-library-card__date-range",
-                "[data-test-id='date-range']",
-                ".date-range",
-            ])
-            fmt = _infer_format(card)
-
-            start, end = _parse_dates(date_text)
-            ads.append({
-                "platform": "linkedin",
-                "advertiser": advertiser,
-                "ad_id": _extract_id(card),
-                "format": fmt,
-                "headline": headline,
-                "primary_text": body,
-                "description": None,
-                "cta": cta or None,
-                "image_url": _src(card, "img"),
-                "video_url": _src(card, "video source, video"),
-                "start_date": start,
-                "end_date": end,
-                "impressions_range": None,
-                "scraped_at": datetime.utcnow().isoformat(),
-            })
-        except Exception:
-            continue
-    return ads
-
-
-def _normalize_api(ad: dict, advertiser: str) -> dict:
-    return {
-        "platform": "linkedin",
-        "advertiser": advertiser,
-        "ad_id": str(ad.get("id") or ad.get("adId") or ""),
-        "format": _map_format(ad.get("adCardType") or ad.get("format") or ""),
-        "headline": ad.get("headline") or ad.get("title") or "",
-        "primary_text": ad.get("introductoryText") or ad.get("body") or "",
-        "description": None,
-        "cta": ad.get("ctaLabel") or ad.get("cta") or None,
-        "image_url": _deep(ad, ["imageUrl", "media", "url"]),
-        "video_url": _deep(ad, ["videoUrl", "media", "streamingLocations", 0, "url"]),
-        "start_date": ad.get("startDate") or ad.get("firstRunDate"),
-        "end_date": ad.get("endDate"),
-        "impressions_range": None,
-        "scraped_at": datetime.utcnow().isoformat(),
-    }
-
-
-def _text(element, selectors: list[str]) -> str:
-    for sel in selectors:
-        try:
-            el = element.query_selector(sel)
-            if el:
-                return (el.inner_text() or "").strip()
-        except Exception:
-            continue
+def _extract_headline(container) -> str:
+    # For thought-leadership ads the "headline" is the person's name + title
+    name_el = container.query_selector(
+        "[aria-label*='View member page'], "
+        ".block.text-md.text-color-text.font-bold"
+    )
+    if name_el:
+        name = (name_el.inner_text() or "").strip()
+        title_el = container.query_selector("p.text-xs.text-color-text-secondary.line-clamp-2")
+        title = (title_el.inner_text() or "").strip() if title_el else ""
+        if name and title:
+            return f"{name} — {title}"
+        return name
     return ""
 
 
-def _src(element, selector: str) -> str | None:
-    try:
-        el = element.query_selector(selector)
-        if el:
-            return el.get_attribute("src") or el.get_attribute("href") or None
-    except Exception:
-        pass
-    return None
-
-
-def _extract_id(card) -> str:
-    for attr in ["data-ad-id", "data-id", "id"]:
-        try:
-            val = card.get_attribute(attr)
-            if val:
-                return val
-        except Exception:
-            pass
-    return ""
-
-
-def _infer_format(card) -> str:
-    try:
-        badge = card.query_selector("[class*='format'], [class*='badge'], [class*='type']")
-        if badge:
-            text = (badge.inner_text() or "").lower()
-            if "video" in text:
-                return "video"
-            if "carousel" in text:
-                return "carousel"
-            if "single" in text or "image" in text:
-                return "single_image"
-        if card.query_selector("video"):
-            return "video"
-        imgs = card.query_selector_all("img")
-        if len(imgs) > 1:
-            return "carousel"
-    except Exception:
-        pass
-    return "single_image"
-
-
-def _map_format(raw: str) -> str:
-    raw = raw.upper()
-    if "VIDEO" in raw:
+def _parse_format(aria_label: str) -> str:
+    label = aria_label.lower()
+    if "video" in label:
         return "video"
-    if "CAROUSEL" in raw:
+    if "carousel" in label:
         return "carousel"
-    if "TEXT" in raw:
+    if "text" in label:
         return "text"
+    if "document" in label:
+        return "document"
     return "single_image"
-
-
-def _parse_dates(text: str) -> tuple[str | None, str | None]:
-    if not text:
-        return None, None
-    parts = re.split(r"[-–—]|\bto\b", text)
-    parts = [p.strip() for p in parts if p.strip()]
-    start = parts[0] if parts else None
-    end = parts[1] if len(parts) > 1 else None
-    return start, end
-
-
-def _deep(obj: dict, path: list) -> str | None:
-    cur = obj
-    for key in path:
-        if isinstance(cur, dict):
-            cur = cur.get(key)
-        elif isinstance(cur, list) and isinstance(key, int) and key < len(cur):
-            cur = cur[key]
-        else:
-            return None
-        if cur is None:
-            return None
-    return str(cur) if cur else None

@@ -5,6 +5,23 @@ See CLAUDE.md for the logging format and rules.
 
 ---
 
+## 2026-05-21 — LinkedIn Ad Library scraper — working implementation
+
+**What changed:**
+- `scrapers/linkedin.py` — complete rewrite. Previous version tried to load `linkedin.com/ad-library/search?companyIds={id}` directly, which returns an empty state ("No results found") — the `companyIds` URL param does not auto-trigger the search. New approach: navigate to the search page, fill the `accountOwner` input with the advertiser name, press Enter, then parse the server-rendered results. Key selectors: `.ad-preview` (card wrapper), `.base-ad-preview-card[aria-label]` (format extraction), `.commentary__content` (post body copy), `.ad-preview__dynamic-dimensions-image` (creative image/video thumbnail). Added `scroll_into_view_if_needed()` on each card before parsing to trigger lazy image loading. Added HubSpot, Salesforce, Zendesk, Intercom, Drift to the company ID lookup table (IDs are not used in the new approach but kept for reference).
+
+**Why:** The old scraper was never tested and had wrong assumptions about how LinkedIn's Ad Library works (it's a plain HTML form, not a SPA with API calls). Discovered through live browser inspection: the page is server-side rendered after form submission, there's no XHR data fetch, and bot detection (PerimeterX + protechts.net) blocks API-level calls but not form submission.
+
+**How it helps:** LinkedIn ads are primarily "thought leadership" style (executives/employees posting sponsored content), which means the `primary_text` field has real, long-form copy that analysis passes can work with directly — unlike Google display ads which require vision extraction. Returns ~20 ads per run with 85%+ having usable copy and image URLs for the remaining vision extraction.
+
+**Traceback notes:**
+- LinkedIn bot detection allows form-based navigation but would likely block high-frequency scraping. For demo use, one advertiser at a time is fine.
+- The `company_id` param is no longer used in `scrape()` — the search uses the advertiser name string. The `_KNOWN_IDS` dict is kept for reference but not for scraping.
+- Single image ads: `image_url` is the full creative image. Video ads: `video_url` is the thumbnail URL (not the actual video stream).
+- Thought-leadership ads (influencer posts) have `primary_text` as the post content and `headline` as "Person Name — Title". Brand ads (direct HubSpot) have no post text but have image URLs for vision extraction.
+
+---
+
 ## 2026-05-21 — Replace Ollama markdown call with programmatic document builder
 
 **What changed:**
