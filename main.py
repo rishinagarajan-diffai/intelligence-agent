@@ -1,0 +1,339 @@
+#!/usr/bin/env python3
+"""Campaign Intelligence Agent — orchestrator.
+
+Usage:
+    python main.py --advertiser "Notion" \\
+                   --competitors "Coda" "Confluence" "Monday.com" "Airtable" \\
+                   --platforms meta google linkedin
+"""
+
+import argparse
+import asyncio
+import os
+import sys
+from datetime import date
+from pathlib import Path
+
+from dotenv import load_dotenv
+from rich.console import Console
+from rich.panel import Panel
+from rich.progress import Progress, SpinnerColumn, TextColumn, BarColumn, TimeElapsedColumn
+from rich.table import Table
+
+load_dotenv()
+
+OLLAMA_HOST = os.environ.get("OLLAMA_HOST", "http://localhost:11434")
+MODEL = os.environ.get("OLLAMA_MODEL", "llama3.2")
+
+
+def _check_ollama() -> bool:
+    """Return True if Ollama is reachable and the configured model is available."""
+    import requests as _req
+    try:
+        resp = _req.get(f"{OLLAMA_HOST}/api/tags", timeout=5)
+        if resp.status_code != 200:
+            return False
+        models = [m.get("name", "") for m in resp.json().get("models", [])]
+        base = MODEL.split(":")[0]
+        return any(m.startswith(base) for m in models)
+    except Exception:
+        return False
+
+
+# Validate Ollama connectivity before importing heavy modules
+if not _check_ollama():
+    print(f"Error: Ollama is not reachable at {OLLAMA_HOST} or model '{MODEL}' is not pulled.")
+    print(f"  Start Ollama:  ollama serve")
+    print(f"  Pull model:    ollama pull {MODEL}")
+    print(f"  Override:      OLLAMA_MODEL=mistral python main.py ...")
+    sys.exit(1)
+
+from scrapers import meta as meta_scraper
+from scrapers import google as google_scraper
+from scrapers import linkedin as linkedin_scraper
+from scrapers import vision_extractor
+from analysis import agent as analysis_agent
+from generator import markdown as md_generator
+from storage import db
+
+console = Console()
+
+# ---------------------------------------------------------------------------
+# LinkedIn company ID resolution
+# ---------------------------------------------------------------------------
+
+_LINKEDIN_IDS: dict[str, str] = {
+    "notion": "10257271",
+    "coda": "18480454",
+    "confluence": "1117",
+    "atlassian": "1117",
+    "monday.com": "10902633",
+    "monday": "10902633",
+    "airtable": "3949382",
+    "asana": "1419599",
+    "clickup": "18416836",
+}
+
+
+def _resolve_linkedin_id(name: str) -> str | None:
+    env_raw = os.environ.get("LINKEDIN_COMPANY_IDS", "")
+    env_map: dict[str, str] = {}
+    for pair in env_raw.split(","):
+        pair = pair.strip()
+        if ":" in pair:
+            k, v = pair.split(":", 1)
+            env_map[k.strip().lower()] = v.strip()
+    return env_map.get(name.lower()) or _LINKEDIN_IDS.get(name.lower())
+
+
+# ---------------------------------------------------------------------------
+# Scraping helpers
+# ---------------------------------------------------------------------------
+
+async def _scrape_one(name: str, platform: str) -> list[dict]:
+    loop = asyncio.get_event_loop()
+    try:
+        if platform == "meta":
+            return await loop.run_in_executor(None, meta_scraper.scrape, name)
+        elif platform == "google":
+            return await loop.run_in_executor(None, google_scraper.scrape, name)
+        elif platform == "linkedin":
+            cid = _resolve_linkedin_id(name)
+            if not cid:
+                console.print(f"  [yellow]⚠ No LinkedIn company ID for {name!r} — skipping[/yellow]")
+                return []
+            return await loop.run_in_executor(None, linkedin_scraper.scrape, cid, name)
+    except Exception as exc:
+        console.print(f"  [red]✗ {platform}/{name}: {exc}[/red]")
+    return []
+
+
+def _parse_impressions(imp_range: str | None) -> int:
+    if not imp_range:
+        return 0
+    try:
+        return int(imp_range.split("-")[0].replace(",", "").strip())
+    except Exception:
+        return 0
+
+
+# ---------------------------------------------------------------------------
+# Main orchestration
+# ---------------------------------------------------------------------------
+
+async def run(advertiser: str, competitors: list[str], platforms: list[str]) -> None:
+    console.print(Panel(
+        f"[bold white]Campaign Intelligence Agent[/bold white]\n\n"
+        f"  Advertiser  : [cyan]{advertiser}[/cyan]\n"
+        f"  Competitors : [cyan]{', '.join(competitors) or 'none'}[/cyan]\n"
+        f"  Platforms   : [yellow]{', '.join(platforms)}[/yellow]\n"
+        f"  LLM         : [green]{MODEL}[/green] via Ollama ({OLLAMA_HOST})",
+        border_style="bright_blue",
+        padding=(1, 2),
+    ))
+
+    db.init_db()
+    db.migrate_vision_columns()
+
+    # -----------------------------------------------------------------------
+    # Phase 1 — Scrape
+    # -----------------------------------------------------------------------
+    console.rule("[bold bright_blue]Phase 1 — Scraping Ad Libraries")
+
+    all_targets = [advertiser] + competitors
+    scrape_jobs = [
+        (name, platform)
+        for name in all_targets
+        for platform in platforms
+    ]
+
+    ads_by_advertiser: dict[str, list[dict]] = {name: [] for name in all_targets}
+    results_table = Table(show_header=True, header_style="bold", box=None)
+    results_table.add_column("Advertiser", style="cyan", min_width=16)
+    results_table.add_column("Platform", style="magenta", min_width=10)
+    results_table.add_column("Ads", style="green", justify="right", min_width=6)
+    results_table.add_column("Status")
+
+    with Progress(
+        SpinnerColumn(),
+        TextColumn("[progress.description]{task.description}"),
+        BarColumn(),
+        TimeElapsedColumn(),
+        console=console,
+        transient=True,
+    ) as progress:
+        task_id = progress.add_task("Scraping...", total=len(scrape_jobs))
+
+        for name, platform in scrape_jobs:
+            progress.update(task_id, description=f"[cyan]{name}[/cyan] / [magenta]{platform}[/magenta]")
+            ads = await _scrape_one(name, platform)
+            ads_by_advertiser[name].extend(ads)
+
+            a_type = "client" if name == advertiser else "competitor"
+            if ads:
+                db.save_ads(ads, a_type)
+
+            status = "[green]✓[/green]" if ads else "[yellow]empty[/yellow]"
+            results_table.add_row(name, platform, str(len(ads)), status)
+            progress.advance(task_id)
+
+    console.print(results_table)
+    console.print()
+
+    total_client = len(ads_by_advertiser[advertiser])
+    total_competitor = sum(len(v) for name, v in ads_by_advertiser.items() if name != advertiser)
+    console.print(
+        f"[green]✓[/green] Scraped [bold]{total_client}[/bold] {advertiser} ads + "
+        f"[bold]{total_competitor}[/bold] competitor ads\n"
+    )
+
+    if total_client == 0:
+        console.print(
+            f"[yellow]Warning:[/yellow] No ads found for {advertiser}. "
+            "Analysis will run with limited data."
+        )
+
+    # -----------------------------------------------------------------------
+    # Phase 1.5 — Vision extraction (read copy from image creatives)
+    # -----------------------------------------------------------------------
+    console.rule("[bold bright_blue]Phase 1.5 — Vision Extraction")
+
+    all_ads_for_vision = list(ads_by_advertiser.values())
+    all_flat = [ad for ads in all_ads_for_vision for ad in ads]
+    needs = sum(
+        1 for a in all_flat
+        if a.get("image_url")
+        and not (a.get("headline") or "").strip()
+        and not (a.get("primary_text") or "").strip()
+    )
+
+    if needs == 0:
+        console.print("  [dim]All ads already have copy — skipping vision extraction[/dim]\n")
+    else:
+        console.print(f"  [dim]{needs} ads have image-only creatives — extracting copy via {MODEL} vision[/dim]")
+        for name in list(ads_by_advertiser.keys()):
+            updated = await vision_extractor.extract_all(
+                ads_by_advertiser[name], console=console
+            )
+            ads_by_advertiser[name] = updated
+            for ad in updated:
+                if ad.get("visual_description") or (ad.get("headline") or "").strip():
+                    db.update_ad_vision(
+                        ad.get("ad_id", ""),
+                        ad.get("advertiser", name),
+                        ad.get("headline", "") or "",
+                        ad.get("primary_text", "") or "",
+                        ad.get("cta", "") or "",
+                        ad.get("visual_description", "") or "",
+                    )
+
+        extracted = sum(
+            1 for ads in ads_by_advertiser.values()
+            for a in ads
+            if (a.get("headline") or "").strip()
+        )
+        console.print(f"[green]✓[/green] Vision extraction complete — {extracted} ads now have copy\n")
+
+    client_ads = ads_by_advertiser[advertiser]
+    competitor_ads = {c: ads_by_advertiser[c] for c in competitors}
+
+    # -----------------------------------------------------------------------
+    # Phase 2 — Analysis
+    # -----------------------------------------------------------------------
+    console.rule("[bold bright_blue]Phase 2 — Analysis (6 passes)")
+
+    analysis = await analysis_agent.run_all_passes(
+        advertiser, client_ads, competitor_ads, console
+    )
+
+    for pass_name, result in analysis.items():
+        db.save_analysis(advertiser, pass_name, result)
+
+    console.print(f"[green]✓[/green] All 6 analysis passes complete\n")
+
+    # -----------------------------------------------------------------------
+    # Phase 3 — Generate brand DNA
+    # -----------------------------------------------------------------------
+    console.rule("[bold bright_blue]Phase 3 — Generating Brand DNA")
+
+    sample_ads = sorted(
+        client_ads,
+        key=lambda a: _parse_impressions(a.get("impressions_range")),
+        reverse=True,
+    )[:10]
+
+    today = date.today().isoformat()
+    slug = advertiser.lower().replace(" ", "-").replace(".", "")
+    output_path = Path("outputs") / f"{slug}-brand-dna-{today}.md"
+    output_path.parent.mkdir(exist_ok=True)
+
+    console.print(f"Calling Claude to synthesize brand DNA...")
+    content = await md_generator.generate(
+        advertiser, platforms, total_client, analysis, sample_ads, date=today
+    )
+
+    output_path.write_text(content, encoding="utf-8")
+    db.save_brand_dna(advertiser, content)
+
+    # -----------------------------------------------------------------------
+    # Summary
+    # -----------------------------------------------------------------------
+    console.print()
+    console.rule("[bold bright_blue]Complete")
+
+    summary = Table(show_header=False, box=None)
+    summary.add_column("Key", style="dim", min_width=24)
+    summary.add_column("Value", style="white")
+    summary.add_row("Advertiser analyzed", advertiser)
+    summary.add_row("Competitors analyzed", str(len(competitors)))
+    summary.add_row(f"{advertiser} ads", str(total_client))
+    summary.add_row("Competitor ads", str(total_competitor))
+    summary.add_row("Platforms", ", ".join(platforms))
+    summary.add_row("Analysis passes", "6")
+    summary.add_row("Output file", str(output_path))
+    console.print(summary)
+    console.print()
+    console.print(f"[green bold]✓[/green bold] Brand DNA written to [bold cyan]{output_path}[/bold cyan]")
+
+
+# ---------------------------------------------------------------------------
+# Entry point
+# ---------------------------------------------------------------------------
+
+def main() -> None:
+    parser = argparse.ArgumentParser(
+        description="Campaign Intelligence Agent — scrape, analyze, and profile advertising strategy",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Examples:
+  python main.py --advertiser "Notion" --competitors "Coda" "Monday.com" --platforms meta google linkedin
+  python main.py --advertiser "Notion" --platforms meta
+        """,
+    )
+    parser.add_argument(
+        "--advertiser",
+        required=True,
+        help="Primary advertiser to analyze (e.g. 'Notion')",
+    )
+    parser.add_argument(
+        "--competitors",
+        nargs="*",
+        default=[],
+        metavar="NAME",
+        help="Competitor advertiser names (space-separated)",
+    )
+    parser.add_argument(
+        "--platforms",
+        nargs="*",
+        default=["meta", "google", "linkedin"],
+        choices=["meta", "google", "linkedin"],
+        metavar="PLATFORM",
+        help="Platforms to scrape: meta google linkedin (default: all three)",
+    )
+
+    args = parser.parse_args()
+    asyncio.run(run(args.advertiser, args.competitors, args.platforms))
+
+
+if __name__ == "__main__":
+    main()
