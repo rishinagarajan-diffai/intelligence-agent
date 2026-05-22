@@ -98,10 +98,7 @@ async def _scrape_one(name: str, platform: str) -> list[dict]:
         elif platform == "google":
             return await loop.run_in_executor(None, google_scraper.scrape, name)
         elif platform == "linkedin":
-            cid = _resolve_linkedin_id(name)
-            if not cid:
-                console.print(f"  [yellow]⚠ No LinkedIn company ID for {name!r} — skipping[/yellow]")
-                return []
+            cid = _resolve_linkedin_id(name) or "0"
             return await loop.run_in_executor(None, linkedin_scraper.scrape, cid, name)
     except Exception as exc:
         console.print(f"  [red]✗ {platform}/{name}: {exc}[/red]")

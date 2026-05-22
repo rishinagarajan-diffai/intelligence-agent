@@ -5,6 +5,26 @@ See CLAUDE.md for the logging format and rules.
 
 ---
 
+## 2026-05-21 — moondream vision model + analysis timeout fixes
+
+**What changed:**
+- `scrapers/vision_extractor.py` — switched vision model from gemma4:e4b to moondream (1.6GB, purpose-built for image text extraction). Added `OLLAMA_VISION_MODEL` env var (default: `moondream`). Raised `_TIMEOUT` from 45s to 60s. Updated console message to show which model is being used.
+- `analysis/agent.py` — raised `_CALL_TIMEOUT` from 120s to 300s. Reduced per-pass sample cap from 40/30 to 25 across all passes (voice, angles, funnel, visual, classifier).
+
+**Why:** Two separate timeout problems discovered during repeated pipeline runs:
+1. gemma4:e4b (8GB) was timing out on every vision call — it's too large for fast image processing on an 11.8GB M4. moondream (1.6GB) completed all 25/25 vision calls in 314s with zero timeouts.
+2. Analysis passes 1-4 run concurrently via asyncio.gather. With 40 samples each, 4 concurrent gemma4:e4b requests exceeded the 120s timeout. 300s is more appropriate for the actual pass duration. Reducing to 25 samples also reduces per-call context size.
+
+**How it helps:** moondream run achieved 25/25 vision successes vs 0/25 with gemma4 under load. 99 ads had copy going into analysis (vs ~40 in previous runs). The 300s timeout ensures analysis passes complete on larger datasets.
+
+**Traceback notes:**
+- If moondream is not pulled, set `OLLAMA_VISION_MODEL=gemma4:e4b` to fall back to the main model. Pull moondream with `ollama pull moondream`.
+- `OLLAMA_NUM_PARALLEL=2` is the right setting when running moondream for vision + gemma4:e4b for analysis together — avoids VRAM competition.
+- Analysis was still timing out at 120s even after the moondream fix. Root cause: 4 concurrent 25-sample passes on gemma4:e4b under Ollama's parallel scheduling. 300s resolved this in subsequent testing.
+- **Tomorrow:** restart Ollama with `OLLAMA_NUM_PARALLEL=2 ollama serve`, then run `python main.py --advertiser "HubSpot" --platforms google linkedin`. Everything else is ready.
+
+---
+
 ## 2026-05-21 — LinkedIn Ad Library scraper — working implementation
 
 **What changed:**

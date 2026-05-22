@@ -224,19 +224,30 @@ SYSTEM_ANALYST = (
 # Core call helper
 # ---------------------------------------------------------------------------
 
+_CALL_TIMEOUT = 300  # seconds per analysis pass
+
+
 async def _call(prompt: str, pass_name: str, console=None) -> dict | list:
     """Single Ollama API call returning parsed JSON."""
     client = _get_client()
 
-    response = await client.chat(
-        model=MODEL,
-        messages=[
-            {"role": "system", "content": SYSTEM_ANALYST},
-            {"role": "user", "content": prompt},
-        ],
-        format="json",
-        options={"temperature": 0.1},
-    )
+    try:
+        response = await asyncio.wait_for(
+            client.chat(
+                model=MODEL,
+                messages=[
+                    {"role": "system", "content": SYSTEM_ANALYST},
+                    {"role": "user", "content": prompt},
+                ],
+                format="json",
+                options={"temperature": 0.1},
+            ),
+            timeout=_CALL_TIMEOUT,
+        )
+    except asyncio.TimeoutError:
+        if console:
+            console.print(f"  [yellow]Warning: {pass_name} timed out after {_CALL_TIMEOUT}s — using empty result[/yellow]")
+        return {}
 
     raw = (response.message.content or "").strip()
 
@@ -281,7 +292,7 @@ async def _pass_classify(advertiser: str, ads: list[dict], console=None) -> dict
         {"ad_id": a.get("ad_id", ""), "headline": a.get("headline", ""), "cta": a.get("cta", "")}
         for a in ads
         if _is_real_copy(a.get("headline", "")) or _is_real_copy(a.get("primary_text", ""))
-    ][:40]
+    ][:25]
     if not slim:
         return {}
     prompt = CLASSIFIER_PROMPT.format(ads_json=json.dumps(slim, indent=2))
@@ -308,7 +319,7 @@ async def _pass_voice(advertiser: str, ads: list[dict], console=None) -> dict:
         }
         for a in ads
         if _is_real_copy(a.get("headline", "")) or _is_real_copy(a.get("primary_text", ""))
-    ][:40]
+    ][:25]
     prompt = VOICE_PROMPT.format(
         advertiser=advertiser,
         total_ads=len(ads),
@@ -361,7 +372,7 @@ async def _pass_angles(advertiser: str, ads: list[dict], console=None) -> list[d
         }
         for i, a in enumerate(ads)
         if _is_real_copy(a.get("headline", "")) or _is_real_copy(a.get("primary_text", ""))
-    ][:30]
+    ][:25]
     prompt = ANGLE_PROMPT.format(
         taxonomy=", ".join(ANGLE_TAXONOMY),
         ads_json=json.dumps(slim, indent=2),
@@ -391,7 +402,7 @@ async def _pass_funnel(advertiser: str, ads: list[dict], console=None) -> dict:
         }
         for i, a in enumerate(ads)
         if _is_real_copy(a.get("headline", "")) or _is_real_copy(a.get("primary_text", ""))
-    ][:30]
+    ][:25]
     prompt = FUNNEL_PROMPT.format(ads_json=json.dumps(slim, indent=2))
     if console:
         console.print(f"  [dim]Pass 3/6 — Format & funnel mapping[/dim]")
@@ -411,7 +422,7 @@ async def _pass_visual(advertiser: str, ads: list[dict], console=None) -> dict:
         }
         for a in ads
         if _is_real_copy(a.get("headline", "")) or a.get("image_url") or a.get("video_url")
-    ][:30]
+    ][:25]
     prompt = VISUAL_PROMPT.format(
         advertiser=advertiser,
         ads_with_visual_context=json.dumps(visual_data, indent=2),

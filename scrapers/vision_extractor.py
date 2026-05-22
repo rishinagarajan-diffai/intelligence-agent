@@ -19,10 +19,12 @@ import requests
 from ollama import AsyncClient
 
 OLLAMA_HOST = os.environ.get("OLLAMA_HOST", "http://localhost:11434")
-MODEL = os.environ.get("OLLAMA_MODEL", "llama3.2")
+# Dedicated small vision model — moondream is 1.6GB and fast at reading image text.
+# Falls back to the main model if OLLAMA_VISION_MODEL is not set.
+VISION_MODEL = os.environ.get("OLLAMA_VISION_MODEL", "moondream")
 
 _MAX_ADS = 25       # only process top N by impressions — all analysis passes use ≤ 40
-_TIMEOUT = 45       # seconds per vision call before we skip that image
+_TIMEOUT = 60       # seconds per vision call (moondream is fast; raised from 45 for safety)
 _IMG_TIMEOUT = 8    # seconds for image fetch
 
 _VISION_PROMPT = (
@@ -81,7 +83,7 @@ async def _extract_one(ad: dict, idx: int, total: int, console=None) -> dict:
         client = AsyncClient(host=OLLAMA_HOST)
         response = await asyncio.wait_for(
             client.chat(
-                model=MODEL,
+                model=VISION_MODEL,
                 messages=[{
                     "role": "user",
                     "content": _VISION_PROMPT,
@@ -137,7 +139,7 @@ async def extract_all(ads: list[dict], console=None) -> list[dict]:
     skipped = len(needs_vision) - len(to_process)
 
     if console:
-        msg = f"  [dim]Vision: processing top {len(to_process)} ads by impressions"
+        msg = f"  [dim]Vision: processing top {len(to_process)} ads by impressions via {VISION_MODEL}"
         if skipped:
             msg += f" (skipping {skipped} lower-impression ads)"
         console.print(msg + f" — ~{len(to_process) * 20 // 60}–{len(to_process) * 45 // 60} min[/dim]")
