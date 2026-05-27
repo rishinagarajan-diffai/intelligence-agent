@@ -1,8 +1,10 @@
 name: Deploy to Railway
 
 on:
-  push:
-    branches: [main]
+  # Manual-only: free Railway accounts can't create API tokens with deploy permissions.
+  # Use the Railway dashboard's GitHub App integration for push-triggered auto-deploys.
+  # This workflow is kept as a fallback for manual deploys when the dashboard webhook
+  # is unavailable (and as a template for upgrading to a paid plan later).
   workflow_dispatch:
 
 jobs:
