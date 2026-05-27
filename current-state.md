@@ -1,6 +1,6 @@
 # Campaign Intelligence Agent — Current State
 
-_Last updated: 2026-05-27 (polling FastAPI endpoint live; Salesforce smoke test passed)_
+_Last updated: 2026-05-27 (hardening: auth + rate limits + Sentry + CI/CD; vision 25→50)_
 
 ---
 
@@ -56,7 +56,27 @@ python main.py --advertiser "HubSpot" --scenario "promoting their new free CRM t
 python regen_dna.py
 ```
 
-### API (new)
+### API — Hosted (Railway)
+
+**Live:** `https://intelligence-api-production-0758.up.railway.app`
+**Docs (Swagger):** `https://intelligence-api-production-0758.up.railway.app/docs` (public)
+**Repo:** `https://github.com/rishinagarajan-diffai/intelligence-agent` (public)
+
+**Auth:** every endpoint except `/docs` requires `X-API-Key: <key>` header. Key lives in `API_KEY` Railway env var (also saved in local `.env`).
+
+**Rate limits (per IP):**
+- `POST /analyze` — 5/hour
+- `POST /regen/{advertiser}` — 10/hour
+- `GET /jobs/{job_id}` — 60/minute
+- `GET /brand-dna/{name}` and `/intel-signal/{name}` — 30/minute
+
+**Observability:** if `SENTRY_DSN` env var is set on Railway, errors and slow requests are reported to Sentry. Currently unset — set it via the Railway dashboard or API to enable.
+
+**Auto-deploy:** `.github/workflows/deploy.yml` calls Railway's GraphQL `serviceInstanceDeploy` on every push to `main`, using the commit SHA. Requires `RAILWAY_TOKEN` GitHub secret (a PAT, not the OAuth token).
+
+**Railway env vars set:** `GEMINI_API_KEY`, `DATABASE_URL=${{Postgres.DATABASE_URL}}`, `PORT=8000`, `API_KEY`.
+
+### API — Local
 
 ```bash
 uvicorn api:app --host 0.0.0.0 --port 8000
@@ -70,16 +90,20 @@ uvicorn api:app --host 0.0.0.0 --port 8000
 | `GET` | `/intel-signal/{advertiser}` | Latest stored intel signal delta |
 | `POST` | `/regen/{advertiser}` | Regenerate Brand DNA from existing DB data, synchronous (~30s) |
 
-**Example:**
+**Example (hosted):**
 ```bash
+KEY="<your-API_KEY>"
+BASE="https://intelligence-api-production-0758.up.railway.app"
+
 # Queue job
-curl -X POST http://localhost:8000/analyze \
+curl -X POST "$BASE/analyze" \
+  -H "X-API-Key: $KEY" \
   -H "Content-Type: application/json" \
   -d '{"advertiser":"Salesforce","platforms":["google","linkedin"]}'
 # → {"job_id":"b954...","status":"queued"}
 
 # Poll
-curl http://localhost:8000/jobs/b954...
+curl -H "X-API-Key: $KEY" "$BASE/jobs/b954..."
 # → {"status":"complete","brand_dna":"# Salesforce — Advertising...","intel_signal":"..."}
 ```
 
@@ -235,6 +259,7 @@ id, advertiser, content, created_at
 
 | Advertiser | Platforms | DB ads | Output | Model | How run |
 |---|---|---|---|---|---|
+| HubSpot | google, linkedin | 135 | inline via `GET /jobs/{id}` | gemini-2.5-flash | **Hosted API (Railway)** |
 | Salesforce | google, linkedin | 101 | `outputs/salesforce-brand-dna-2026-05-27.md` | gemini-3.1-pro-preview | API (`POST /analyze`) |
 | ThoughtSpot | google, linkedin | 80 | `outputs/thoughtspot-brand-dna-2026-05-27.md` | gemini-3.1-pro-preview | CLI |
 | OpenAI | meta, google, linkedin | 110 | `outputs/openai-brand-dna-2026-05-27.md` | gemini-2.5-flash | CLI |
@@ -247,7 +272,9 @@ _Note: OpenAI/Anthropic/Rippling Brand DNAs are from pre-KeyError-fix runs. Re-r
 
 ## QA Status (2026-05-27)
 
-**API smoke test (Salesforce)** — end-to-end confirmed: `POST /analyze` → job queued, polled to `complete` in ~3.5 min, 16,627-char brand DNA + intel signal both present in `GET /jobs/{id}` response.
+**Hosted API smoke test (HubSpot, Railway)** — end-to-end confirmed live: `POST /analyze` → polled to `complete` in 3.7 min, 16,302-char brand DNA returned inline. Postgres-backed (no SQLite on prod). Repo public at `github.com/rishinagarajan-diffai/intelligence-agent`.
+
+**Local API smoke test (Salesforce, SQLite)** — `POST /analyze` → polled to `complete` in ~3.5 min, 16,627-char brand DNA + intel signal in `GET /jobs/{id}` response.
 
 **Gemini 3.1 Pro evaluation** — ThoughtSpot run confirmed measurably better instruction following vs. 2.5 Flash. Platform Strategy blockquote renders correctly; writing formulas more specific.
 
@@ -280,12 +307,23 @@ Before this is production-ready as a service:
 
 1. **Meta Graph API approval** — pending since 2026-05-22; unblocks noise-free Meta scraping
 2. **Meta page-ID filtering** — post-filter by page name to remove keyword-match noise (interim fix)
-3. **SQLite → Postgres** — needed for concurrent multi-tenant runs; `get_connection()` is the only swap point
-4. **`client_id` scoping** — no multi-tenancy in DB or scraper layer yet
-5. **Scheduled re-scraping** — one-shot today; needs weekly refresh of `intel_signals`
-6. **`--limit` CLI flag** — scrape limit not tunable without editing source
-7. **LinkedIn auth** — image-only ads have no copy without authenticated scraping
-8. **`regen_dna.py` module guard** — runs `asyncio.run(main())` at import time; API bypasses it, but the file needs a `if __name__ == "__main__"` guard to be importable cleanly
+3. **`client_id` scoping** — no multi-tenancy in DB or scraper layer yet
+4. **Scheduled re-scraping** — one-shot today; needs weekly refresh of `intel_signals`
+5. **`--limit` CLI flag** — scrape limit not tunable without editing source
+6. **LinkedIn auth** — image-only ads have no copy without authenticated scraping
+7. **In-process BackgroundTasks** — `_run_pipeline` runs inside the FastAPI worker. If Railway redeploys mid-job, the job is lost; the DB row stays `running` forever (no timeout). Fix: external task queue (ARQ/Redis or Cloud Tasks) before exposing to real users.
+8. **GEMINI_API_KEY is shared across all callers** — no per-tenant quotas; one noisy user can exhaust the quota.
+
+✅ **Resolved this session:**
+- ~~SQLite → Postgres~~ — dual-backend; Postgres active in prod
+- ~~Service wrapper~~ — FastAPI polling API live
+- ~~Hosting~~ — Railway deploy at `intelligence-api-production-0758.up.railway.app`
+- ~~`regen_dna.py` module guard~~ — `if __name__ == "__main__"` added
+- ~~API auth~~ — `X-API-Key` header required on all routes
+- ~~Rate limiting~~ — per-IP via slowapi (analyze 5/hr, reads 60/min)
+- ~~Vision coverage~~ — top 25 → top 50 image-only ads
+- ~~Error observability~~ — Sentry init wired (set `SENTRY_DSN` to activate)
+- ~~GitHub auto-deploy~~ — `.github/workflows/deploy.yml` calls Railway GraphQL on push (needs `RAILWAY_TOKEN` secret)
 
 ---
 
@@ -304,8 +342,11 @@ ThoughtSpot delta (2026-05-27 vs 2026-05-26) detected: "Dashboards Are Dead. Try
 
 ## Next Steps
 
-1. Re-run OpenAI, Anthropic, Rippling to get clean post-fix Brand DNAs
-2. Decide on hybrid model routing: 3.1 Pro for Phase 3 (Brand DNA + delta), Flash for analysis passes
-3. Run Descope + HubSpot to build delta baselines
-4. Add `if __name__ == "__main__"` guard to `regen_dna.py` so it's cleanly importable
-5. Productionize: Postgres, `client_id`, scheduled re-scraping
+1. Add `RAILWAY_TOKEN` GitHub secret to activate the auto-deploy workflow (one-time)
+2. Set `SENTRY_DSN` on Railway to enable error tracking
+3. Replace in-process `BackgroundTasks` with a real queue (ARQ + Redis) so jobs survive redeploys
+4. Re-run OpenAI, Anthropic, Rippling on hosted API to seed Postgres baselines
+5. Decide on hybrid model routing: 3.1 Pro for Phase 3 (Brand DNA + delta), Flash for analysis passes
+6. Day-2 run for HubSpot (and others) to populate intel signal deltas
+7. Add `client_id` scoping for multi-tenant
+8. Schedule weekly re-scrapes (Railway cron or external scheduler)

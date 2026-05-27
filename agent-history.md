@@ -9,6 +9,25 @@
 **How it helps:** `docker build` produces a deployable image. `DATABASE_URL` env var switches the entire persistence layer to Postgres — no other config needed. SQLite still works locally when `DATABASE_URL` is unset. `get_stale_market_context()` centralizes the SYSTEMIC-04 JSON query so it uses the right JSON dialect per backend (SQLite `json_extract` vs Postgres `jsonb`).
 **Traceback notes:** `_PgConn` wraps psycopg2 to expose the same `execute/executemany/commit/close` interface as sqlite3.Connection so all existing db callers work unchanged. Railway sets `$PORT` at runtime — CMD uses `${PORT:-8000}` so local `docker run` also works without setting PORT. `postgres://` URL prefix auto-corrected to `postgresql://` (Railway emits both).
 
+## 2026-05-27 — Hardening pass: auth, rate limiting, vision coverage, Sentry, CI/CD
+
+**What changed:** `api.py` (X-API-Key auth + slowapi rate limits + optional Sentry), `requirements.txt` (+slowapi, +sentry-sdk[fastapi]), `scrapers/vision_extractor.py` (`_MAX_ADS` 25 → 50), `.github/workflows/deploy.yml` (new).
+**Why:** Pre-hardening, the hosted API was unauthenticated against my Gemini key — anyone with the URL could spend money. Vision was processing only 25/91 image-only ads. Errors had no observability. Every commit needed a manual `serviceInstanceDeploy` with explicit `commitSha`.
+**How it helps:**
+- All endpoints (except `/docs`, `/openapi.json`) now require `X-API-Key` header matching server-side `API_KEY` env var. Verified 401 on missing/wrong key, 200 on correct key.
+- Per-IP rate limits via slowapi: `/analyze` 5/hr, `/regen` 10/hr, `/jobs/{id}` 60/min, reads 30/min.
+- Vision extracts top 50 image-only ads (was 25) — doubles DB coverage for ownership filter + future analysis improvements.
+- Sentry initializes only if `SENTRY_DSN` env var set (graceful no-op otherwise). Background job exceptions captured via `sentry_sdk.capture_exception`.
+- GitHub Actions workflow (`.github/workflows/deploy.yml`) calls Railway GraphQL `serviceInstanceDeploy` with HEAD's `commitSha` on every push to main. Requires `RAILWAY_TOKEN` GitHub secret (a PAT from `railway.com/account/tokens`, NOT the OAuth access token).
+**Traceback notes:** `slowapi` rate-limit decorators require the route handler signature to include `request: Request` — added that to all endpoints. Sentry init MUST happen before FastAPI app creation to catch startup errors. The first GitHub Actions run failed (expected) because `RAILWAY_TOKEN` secret hadn't been added yet — workflow exits cleanly with an error message in that case.
+
+## 2026-05-27 — Live Railway deploy + HubSpot smoke test
+
+**What changed:** No code changes — Railway project provisioning + first live deploy.
+**Why:** Move from localhost API to a hosted endpoint so external systems can call the pipeline.
+**How it helps:** API now serves at `https://intelligence-api-production-0758.up.railway.app` with the Postgres addon attached via `${{Postgres.DATABASE_URL}}` reference. HubSpot live test: 135 ads scraped + 8-pass analyzed in 3.7 min, 16,302-char brand DNA returned inline via `GET /jobs/{id}`. Docs available at `/docs`. GitHub repo: `https://github.com/rishinagarajan-diffai/intelligence-agent` (public).
+**Traceback notes:** Railway provisioning order matters — (1) `serviceCreate` with `source.repo`, (2) `variableUpsert` for `GEMINI_API_KEY`, (3) `variableUpsert` for `DATABASE_URL` = `${{Postgres.DATABASE_URL}}` (literal value, not the resolved URL), (4) `variableUpsert` for `PORT=8000` so the domain target matches uvicorn's bind port, (5) `serviceInstanceDeploy` with `commitSha` arg pointing at HEAD, (6) `serviceDomainCreate` with `targetPort: 8000`. **The `commitSha` arg is critical** — without it, `serviceInstanceDeploy` redeploys the *snapshot at service creation time*, not the latest GitHub commit. This caused 5 consecutive failed builds before I realized Railway was deploying commit `fc5d05d` (the initial one with the broken `startCommand`) on every redeploy. GitHub auto-deploy webhooks are NOT wired up when the service is created via API — only via the dashboard. Workaround: pass `commitSha` explicitly every redeploy, or wire the webhook manually.
+
 ## 2026-05-27 — Salesforce API smoke test
 
 **What changed:** No code changes — validation run only.
