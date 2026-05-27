@@ -57,7 +57,9 @@ def scrape(company_id: str, advertiser: str, limit: int = 50) -> list[dict]:
     try:
         from playwright.sync_api import sync_playwright, TimeoutError as PwTimeout
     except ImportError:
-        return []
+        raise RuntimeError(
+            "Playwright is not installed. Run: python -m playwright install chromium"
+        )
 
     ads: list[dict] = []
 
@@ -153,9 +155,20 @@ def _parse_card(card, advertiser: str) -> dict | None:
         aria = container.get_attribute("aria-label") or ""
         fmt = _parse_format(aria)
 
+        # Filter: only keep ads from the target advertiser's company page
+        company_name = aria.split(",")[0].strip()
+        if company_name.lower() != advertiser.lower():
+            return None
+
         # Body copy from commentary
         commentary = container.query_selector(".commentary__content")
         primary_text = (commentary.inner_text() or "").strip() if commentary else ""
+        # Strip leading LinkedIn attribution lines ("Sponsored Advertiser www.domain.com/path")
+        if primary_text:
+            lines = primary_text.splitlines()
+            while lines and (lines[0].startswith("Sponsored ") or "www." in lines[0]):
+                lines.pop(0)
+            primary_text = "\n".join(lines).strip()
 
         # Headline — LinkedIn doesn't expose it directly in the card;
         # for thought-leadership ads it's the commenter's description.
@@ -182,6 +195,20 @@ def _parse_card(card, advertiser: str) -> dict | None:
             video_url = image_url
             image_url = None
 
+        # Landing page URL from CTA button
+        landing_url = None
+        cta_link = container.query_selector("a.ad-preview__cta-link, a[data-tracking-control-name*='cta'], a.base-button")
+        if not cta_link:
+            # Fallback: any external anchor that isn't the detail link
+            all_links = container.query_selector_all("a[href^='http']")
+            for link in all_links:
+                href = link.get_attribute("href") or ""
+                if "linkedin.com" not in href and "ad-library" not in href:
+                    landing_url = href
+                    break
+        else:
+            landing_url = cta_link.get_attribute("href") or None
+
         return {
             "platform": "linkedin",
             "advertiser": advertiser,
@@ -197,6 +224,7 @@ def _parse_card(card, advertiser: str) -> dict | None:
             "end_date": None,
             "impressions_range": None,
             "scraped_at": datetime.utcnow().isoformat(),
+            "landing_url": landing_url,
         }
     except Exception:
         return None

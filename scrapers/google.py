@@ -23,6 +23,7 @@ import json
 import re
 import time
 from datetime import datetime, timezone
+from urllib.parse import urlparse, parse_qs
 
 _UA = (
     "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
@@ -39,13 +40,16 @@ def scrape(advertiser: str, limit: int = 100) -> list[dict]:
     try:
         from playwright.sync_api import sync_playwright, TimeoutError as PwTimeout
     except ImportError:
-        return []
+        raise RuntimeError(
+            "Playwright is not installed. Run: python -m playwright install chromium"
+        )
 
     with sync_playwright() as pw:
         browser = pw.chromium.launch(headless=True)
         page = browser.new_page(user_agent=_UA, viewport={"width": 1280, "height": 900})
 
         creatives: list[dict] = []
+        target_advertiser_id: str | None = None
 
         def on_response(resp):
             if resp.status == 200 and "SearchCreatives" in resp.url:
@@ -80,6 +84,11 @@ def scrape(advertiser: str, limit: int = 100) -> list[dict]:
             _click_best_match(page, advertiser)
             page.wait_for_timeout(6000)
 
+            # Capture the canonical advertiser_id from the ATC URL
+            parsed = urlparse(page.url)
+            qs = parse_qs(parsed.query)
+            target_advertiser_id = (qs.get("advertiserId") or qs.get("advertiser_id") or [None])[0]
+
             # Scroll to load more creatives
             seen = set()
             for _ in range(6):
@@ -98,6 +107,15 @@ def scrape(advertiser: str, limit: int = 100) -> list[dict]:
             pass
         finally:
             browser.close()
+
+    if target_advertiser_id:
+        creatives = [c for c in creatives if c.get("1") == target_advertiser_id]
+    elif creatives:
+        # No advertiser_id captured (ATC navigation didn't land on an advertiser page).
+        # Fall back to proto field "12" (advertiser_name) to filter out unrelated ads.
+        name_filtered = [c for c in creatives if advertiser.lower() in str(c.get("12", "")).lower()]
+        if name_filtered:
+            creatives = name_filtered
 
     return [_normalize(c, advertiser) for c in creatives[:limit]]
 
@@ -162,6 +180,11 @@ def _normalize(creative: dict, advertiser: str) -> dict:
     if preview_url and not headline:
         headline, primary_text = _extract_responsive_copy(preview_url)
 
+    # Final URL from proto field "5" (best-effort — not always present)
+    final_url = creative.get("5") or None
+    if isinstance(final_url, dict):
+        final_url = final_url.get("1") or None
+
     start_ts = _parse_ts(creative.get("6", {}))
     end_ts = _parse_ts(creative.get("7", {}))
 
@@ -171,6 +194,7 @@ def _normalize(creative: dict, advertiser: str) -> dict:
     return {
         "platform": "google",
         "advertiser": advertiser,
+        "advertiser_id": creative.get("1", ""),
         "ad_id": creative.get("2", ""),
         "format": fmt,
         "headline": headline,
@@ -183,6 +207,7 @@ def _normalize(creative: dict, advertiser: str) -> dict:
         "end_date": end_ts,
         "impressions_range": imp_range,
         "scraped_at": datetime.utcnow().isoformat(),
+        "landing_url": final_url,
     }
 
 
@@ -218,6 +243,8 @@ def _extract_responsive_copy(preview_url: str) -> tuple[str, str]:
             s for s in candidates
             if " " in s
             and not s.startswith("http")
+            and not s.startswith("Sponsored")
+            and "www." not in s
             and not any(s.startswith(noise) for noise in _JS_NOISE)
             and not re.search(r'\b(function|return|typeof|instanceof|prototype|undefined|null)\b', s)
         ]

@@ -22,31 +22,7 @@ from rich.table import Table
 
 load_dotenv()
 
-OLLAMA_HOST = os.environ.get("OLLAMA_HOST", "http://localhost:11434")
-MODEL = os.environ.get("OLLAMA_MODEL", "llama3.2")
-
-
-def _check_ollama() -> bool:
-    """Return True if Ollama is reachable and the configured model is available."""
-    import requests as _req
-    try:
-        resp = _req.get(f"{OLLAMA_HOST}/api/tags", timeout=5)
-        if resp.status_code != 200:
-            return False
-        models = [m.get("name", "") for m in resp.json().get("models", [])]
-        base = MODEL.split(":")[0]
-        return any(m.startswith(base) for m in models)
-    except Exception:
-        return False
-
-
-# Validate Ollama connectivity before importing heavy modules
-if not _check_ollama():
-    print(f"Error: Ollama is not reachable at {OLLAMA_HOST} or model '{MODEL}' is not pulled.")
-    print(f"  Start Ollama:  ollama serve")
-    print(f"  Pull model:    ollama pull {MODEL}")
-    print(f"  Override:      OLLAMA_MODEL=mistral python main.py ...")
-    sys.exit(1)
+GEMINI_MODEL = os.environ.get("GEMINI_MODEL", "gemini-2.5-flash")
 
 from scrapers import meta as meta_scraper
 from scrapers import google as google_scraper
@@ -118,19 +94,19 @@ def _parse_impressions(imp_range: str | None) -> int:
 # Main orchestration
 # ---------------------------------------------------------------------------
 
-async def run(advertiser: str, competitors: list[str], platforms: list[str]) -> None:
+async def run(advertiser: str, competitors: list[str], platforms: list[str], scenario: str | None = None) -> None:
     console.print(Panel(
         f"[bold white]Campaign Intelligence Agent[/bold white]\n\n"
         f"  Advertiser  : [cyan]{advertiser}[/cyan]\n"
         f"  Competitors : [cyan]{', '.join(competitors) or 'none'}[/cyan]\n"
         f"  Platforms   : [yellow]{', '.join(platforms)}[/yellow]\n"
-        f"  LLM         : [green]{MODEL}[/green] via Ollama ({OLLAMA_HOST})",
+        f"  LLM         : [green]{GEMINI_MODEL}[/green] via Gemini API",
         border_style="bright_blue",
         padding=(1, 2),
     ))
 
     db.init_db()
-    db.migrate_vision_columns()
+    db.migrate_columns(console)
 
     # -----------------------------------------------------------------------
     # Phase 1 — Scrape
@@ -177,19 +153,6 @@ async def run(advertiser: str, competitors: list[str], platforms: list[str]) -> 
     console.print(results_table)
     console.print()
 
-    total_client = len(ads_by_advertiser[advertiser])
-    total_competitor = sum(len(v) for name, v in ads_by_advertiser.items() if name != advertiser)
-    console.print(
-        f"[green]✓[/green] Scraped [bold]{total_client}[/bold] {advertiser} ads + "
-        f"[bold]{total_competitor}[/bold] competitor ads\n"
-    )
-
-    if total_client == 0:
-        console.print(
-            f"[yellow]Warning:[/yellow] No ads found for {advertiser}. "
-            "Analysis will run with limited data."
-        )
-
     # -----------------------------------------------------------------------
     # Phase 1.5 — Vision extraction (read copy from image creatives)
     # -----------------------------------------------------------------------
@@ -207,7 +170,7 @@ async def run(advertiser: str, competitors: list[str], platforms: list[str]) -> 
     if needs == 0:
         console.print("  [dim]All ads already have copy — skipping vision extraction[/dim]\n")
     else:
-        console.print(f"  [dim]{needs} ads have image-only creatives — extracting copy via {MODEL} vision[/dim]")
+        console.print(f"  [dim]{needs} ads have image-only creatives — extracting copy via {GEMINI_MODEL} vision[/dim]")
         for name in list(ads_by_advertiser.keys()):
             updated = await vision_extractor.extract_all(
                 ads_by_advertiser[name], console=console
@@ -231,6 +194,34 @@ async def run(advertiser: str, competitors: list[str], platforms: list[str]) -> 
         )
         console.print(f"[green]✓[/green] Vision extraction complete — {extracted} ads now have copy\n")
 
+    # -----------------------------------------------------------------------
+    # Phase 1.6 — Ad ownership filter (runs after vision so image copy is available)
+    # -----------------------------------------------------------------------
+    from analysis.ad_filter import filter_owned_ads
+
+    console.print(f"  [dim]Filtering owned ads (domain check + Gemini fallback)...[/dim]")
+    try:
+        ads_by_advertiser[advertiser] = await filter_owned_ads(
+            ads_by_advertiser[advertiser], advertiser, console
+        )
+    except Exception as _filter_exc:
+        console.print(f"  [yellow]Warning: ownership filter failed ({_filter_exc!r}) — using unfiltered ads[/yellow]")
+
+    total_client = len(ads_by_advertiser[advertiser])
+    total_competitor = sum(len(v) for name, v in ads_by_advertiser.items() if name != advertiser)
+    console.print(
+        f"[green]✓[/green] Scraped [bold]{total_client}[/bold] {advertiser} ads + "
+        f"[bold]{total_competitor}[/bold] competitor ads\n"
+    )
+
+    if total_client == 0:
+        console.print(
+            f"[yellow]Warning:[/yellow] No ads found for {advertiser}. "
+            "Check that the advertiser name matches exactly how it appears in the ad library. "
+            "Skipping analysis and Brand DNA generation."
+        )
+        return
+
     client_ads = ads_by_advertiser[advertiser]
     competitor_ads = {c: ads_by_advertiser[c] for c in competitors}
 
@@ -240,24 +231,60 @@ async def run(advertiser: str, competitors: list[str], platforms: list[str]) -> 
     console.rule("[bold bright_blue]Phase 2 — Analysis (6 passes)")
 
     analysis = await analysis_agent.run_all_passes(
-        advertiser, client_ads, competitor_ads, console
+        advertiser, client_ads, competitor_ads, console, scenario=scenario
     )
 
+    # Persist ad_type classifications to DB
+    type_map = analysis.get("type_map", {})
+    if type_map:
+        for ad_id, ad_type in type_map.items():
+            db.update_ad_type(ad_id, advertiser, ad_type)
+        console.print(f"  [dim]Updated ad_type for {len(type_map)} ads[/dim]")
+
+    # Fetch the previous analysis snapshot BEFORE saving the new one —
+    # get_latest_analysis() returns the highest-id row per pass, which is the previous run.
+    from storage.db import get_latest_analysis
+    prev_analysis, prev_date, prev_ad_count = get_latest_analysis(advertiser)
+
+    # Save analysis passes. type_distribution is saved here (not skipped) so future
+    # delta runs can reconstruct ad count from the DB.
     for pass_name, result in analysis.items():
+        if pass_name == "type_map":
+            continue
         db.save_analysis(advertiser, pass_name, result)
 
-    console.print(f"[green]✓[/green] All 6 analysis passes complete\n")
+    console.print(f"[green]✓[/green] All 7 analysis passes complete\n")
 
     # -----------------------------------------------------------------------
     # Phase 3 — Generate brand DNA
     # -----------------------------------------------------------------------
     console.rule("[bold bright_blue]Phase 3 — Generating Brand DNA")
 
-    sample_ads = sorted(
-        client_ads,
+    from analysis.agent import _is_real_copy
+    import re as _re
+    def _is_byline(headline: str) -> bool:
+        return bool(_re.match(r'^[A-Z][a-z]+(?:\s+[A-Z][a-z]+){1,2}\s+—', headline))
+    sorted_ads = sorted(
+        [
+            a for a in client_ads
+            if (_is_real_copy(a.get("headline", "")) or _is_real_copy(a.get("primary_text", "")))
+            and not _is_byline(a.get("headline", ""))
+            and not (
+                a.get("headline", "").strip().lower() == advertiser.lower()
+                and not _is_real_copy(a.get("primary_text", ""))
+            )
+        ],
         key=lambda a: _parse_impressions(a.get("impressions_range")),
         reverse=True,
-    )[:20]
+    )
+    seen_content: set[tuple[str, str]] = set()
+    deduped = []
+    for a in sorted_ads:
+        key = (a.get("headline", "").strip(), a.get("primary_text", "")[:100].strip())
+        if key not in seen_content:
+            seen_content.add(key)
+            deduped.append(a)
+    sample_ads = deduped[:20]
 
     today = date.today().isoformat()
     slug = advertiser.lower().replace(" ", "-").replace(".", "")
@@ -266,11 +293,35 @@ async def run(advertiser: str, competitors: list[str], platforms: list[str]) -> 
 
     console.print(f"  Building Brand DNA from analysis data...")
     content = await md_generator.generate(
-        advertiser, platforms, total_client, analysis, sample_ads, date=today
+        advertiser, platforms, total_client, analysis, sample_ads,
+        date=today, prev_analysis=prev_analysis or {},
     )
 
     output_path.write_text(content, encoding="utf-8")
     db.save_brand_dna(advertiser, content)
+
+    # -----------------------------------------------------------------------
+    # Delta signal report (only when a previous run exists)
+    # -----------------------------------------------------------------------
+    if prev_analysis:
+        from generator import delta as delta_generator
+        console.print(f"  [dim]Generating competitive signal delta vs {prev_date} baseline...[/dim]")
+        try:
+            delta_content = await delta_generator.generate(
+                advertiser=advertiser,
+                prev_analysis=prev_analysis,
+                curr_analysis={**analysis, "type_distribution": analysis.get("type_distribution", {})},
+                prev_date=prev_date,
+                curr_date=today,
+                prev_ads=prev_ad_count,
+                curr_ads=total_client,
+            )
+            delta_path = Path("outputs") / f"{slug}-intel-signal-{today}.md"
+            delta_path.write_text(delta_content, encoding="utf-8")
+            db.save_intel_signal(advertiser, delta_content)
+            console.print(f"  [dim]Signal delta written to {delta_path}[/dim]")
+        except Exception as exc:
+            console.print(f"  [yellow]Warning: delta generation failed ({exc!r}) — skipping[/yellow]")
 
     # -----------------------------------------------------------------------
     # Summary
@@ -286,7 +337,7 @@ async def run(advertiser: str, competitors: list[str], platforms: list[str]) -> 
     summary.add_row(f"{advertiser} ads", str(total_client))
     summary.add_row("Competitor ads", str(total_competitor))
     summary.add_row("Platforms", ", ".join(platforms))
-    summary.add_row("Analysis passes", "6")
+    summary.add_row("Analysis passes", "7")
     summary.add_row("Output file", str(output_path))
     console.print(summary)
     console.print()
@@ -298,6 +349,13 @@ async def run(advertiser: str, competitors: list[str], platforms: list[str]) -> 
 # ---------------------------------------------------------------------------
 
 def main() -> None:
+    if not os.environ.get("GEMINI_API_KEY"):
+        console.print(
+            "[red]Error:[/red] GEMINI_API_KEY is not set. "
+            "Add it to your .env file — get one at https://aistudio.google.com/apikey"
+        )
+        raise SystemExit(1)
+
     parser = argparse.ArgumentParser(
         description="Campaign Intelligence Agent — scrape, analyze, and profile advertising strategy",
         formatter_class=argparse.RawDescriptionHelpFormatter,
@@ -322,14 +380,25 @@ Examples:
     parser.add_argument(
         "--platforms",
         nargs="*",
-        default=["meta", "google", "linkedin"],
+        default=["google", "linkedin"],
         choices=["meta", "google", "linkedin"],
-        metavar="PLATFORM",
-        help="Platforms to scrape: meta google linkedin (default: all three)",
+        help="Platforms to scrape (default: google linkedin). meta requires Ad Library API approval.",
     )
-
+    parser.add_argument(
+        "--scenario",
+        default=None,
+        metavar="TEXT",
+        help=(
+            "Scenario context for synthetic ad generation, e.g. "
+            "'promoting a new free trial tier targeting operations teams' (1-2 sentences). "
+            "If omitted, scenario is derived from the brand's observed voice."
+        ),
+    )
     args = parser.parse_args()
-    asyncio.run(run(args.advertiser, args.competitors, args.platforms))
+    if not args.competitors:
+        import sys as _sys
+        print("Note: no --competitors specified — competitive gap analysis will be skipped.", file=_sys.stderr)
+    asyncio.run(run(args.advertiser, args.competitors, args.platforms, scenario=args.scenario))
 
 
 if __name__ == "__main__":

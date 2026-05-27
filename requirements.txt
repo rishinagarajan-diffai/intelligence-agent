@@ -1,6 +1,11 @@
-ollama>=0.3.0
+# Requires Python 3.10+ (uses str|None union syntax and dict[str, str] generics)
+# After pip install: run `python -m playwright install chromium` to install the browser binary
+google-genai>=1.0.0
 requests>=2.31.0
 beautifulsoup4>=4.12.0
 playwright>=1.40.0
 python-dotenv>=1.0.0
 rich>=13.0.0
+fastapi>=0.110.0
+uvicorn>=0.27.0
+psycopg2-binary>=2.9.0

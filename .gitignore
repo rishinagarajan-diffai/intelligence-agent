@@ -6,8 +6,11 @@
 intelligence.db
 *.db
 
-# Generated outputs
-# outputs/  # committed for demo reference
+# Generated outputs — excluded from public repo; generated at runtime
+outputs/
+
+# Internal planning docs
+PLAN.md
 
 # Python
 .venv/
