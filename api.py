@@ -39,7 +39,7 @@ if _SENTRY_DSN:
     import sentry_sdk
     sentry_sdk.init(
         dsn=_SENTRY_DSN,
-        traces_sample_rate=0.1,
+        traces_sample_rate=1.0,  # full sampling during POC; dial down later
         send_default_pii=False,
     )
 
