@@ -1,6 +1,6 @@
 # Campaign Intelligence Agent — Current State
 
-_Last updated: 2026-05-27 (hardening: auth + rate limits + Sentry + CI/CD; vision 25→50)_
+_Last updated: 2026-05-27 (Sentry active w/ full perf tracing; webhook auto-deploy verified)_
 
 ---
 
@@ -70,11 +70,11 @@ python regen_dna.py
 - `GET /jobs/{job_id}` — 60/minute
 - `GET /brand-dna/{name}` and `/intel-signal/{name}` — 30/minute
 
-**Observability:** if `SENTRY_DSN` env var is set on Railway, errors and slow requests are reported to Sentry. Currently unset — set it via the Railway dashboard or API to enable.
+**Observability:** Sentry **active** — `SENTRY_DSN` set on Railway, `traces_sample_rate=1.0` (full sampling). Errors + performance traces at `sentry.io/issues/` and `sentry.io/performance/`.
 
 **Auto-deploy:** Railway's GitHub App is installed on the repo with auto-deploy enabled — every push to `main` triggers a Railway build/deploy via webhook (no API token needed; works on free tier). The `.github/workflows/deploy.yml` is kept as a manual-trigger fallback (`workflow_dispatch`) for cases where the webhook needs bypassing.
 
-**Railway env vars set:** `GEMINI_API_KEY`, `DATABASE_URL=${{Postgres.DATABASE_URL}}`, `PORT=8000`, `API_KEY`.
+**Railway env vars set:** `GEMINI_API_KEY`, `DATABASE_URL=${{Postgres.DATABASE_URL}}`, `PORT=8000`, `API_KEY`, `SENTRY_DSN`.
 
 ### API — Local
 
@@ -322,7 +322,7 @@ Before this is production-ready as a service:
 - ~~API auth~~ — `X-API-Key` header required on all routes
 - ~~Rate limiting~~ — per-IP via slowapi (analyze 5/hr, reads 60/min)
 - ~~Vision coverage~~ — top 25 → top 50 image-only ads
-- ~~Error observability~~ — Sentry init wired (set `SENTRY_DSN` to activate)
+- ~~Error observability~~ — Sentry active w/ full perf tracing (`traces_sample_rate=1.0`)
 - ~~GitHub auto-deploy~~ — `.github/workflows/deploy.yml` calls Railway GraphQL on push (needs `RAILWAY_TOKEN` secret)
 
 ---
@@ -342,10 +342,12 @@ ThoughtSpot delta (2026-05-27 vs 2026-05-26) detected: "Dashboards Are Dead. Try
 
 ## Next Steps
 
-1. Set `SENTRY_DSN` on Railway to enable error tracking
-3. Replace in-process `BackgroundTasks` with a real queue (ARQ + Redis) so jobs survive redeploys
-4. Re-run OpenAI, Anthropic, Rippling on hosted API to seed Postgres baselines
-5. Decide on hybrid model routing: 3.1 Pro for Phase 3 (Brand DNA + delta), Flash for analysis passes
-6. Day-2 run for HubSpot (and others) to populate intel signal deltas
-7. Add `client_id` scoping for multi-tenant
+1. Replace in-process `BackgroundTasks` with a real queue (ARQ + Redis) so jobs survive redeploys — top remaining POC blocker
+2. Add `client_id` scoping for multi-tenant (currently single-tenant — two customers analyzing the same advertiser would collide)
+3. Per-tenant Gemini key or quota (currently one shared key for all callers)
+4. Set Google Cloud billing alert on the Gemini API project to cap spend
+5. Re-run OpenAI, Anthropic, Rippling on hosted API to seed Postgres baselines
+6. Decide on hybrid model routing: 3.1 Pro for Phase 3 (Brand DNA + delta), Flash for analysis passes
+7. Day-2 run for HubSpot (and others) to populate intel signal deltas
 8. Schedule weekly re-scrapes (Railway cron or external scheduler)
+9. Dial Sentry `traces_sample_rate` back to 0.1–0.25 once volume picks up
