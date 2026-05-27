@@ -21,7 +21,7 @@ from google.genai import types as genai_types
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "")
 GEMINI_MODEL = os.environ.get("GEMINI_MODEL", "gemini-2.5-flash")
 
-_MAX_ADS = 25       # only process top N by impressions — all analysis passes use ≤ 25
+_MAX_ADS = 50       # top N by impressions — bumped from 25 to widen DB coverage of image-only ads
 _TIMEOUT = 60       # seconds per vision call
 _IMG_TIMEOUT = 8    # seconds for image fetch
 

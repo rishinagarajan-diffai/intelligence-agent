@@ -1,0 +1,45 @@
+name: Deploy to Railway
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Trigger Railway deploy at this commit
+        env:
+          RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
+          SERVICE_ID: e5ef179c-1cb3-4d59-8deb-f7d028d502a2
+          ENVIRONMENT_ID: 7f2aeee7-ef39-4462-a8a7-f6ef7221a893
+        run: |
+          set -e
+          if [ -z "$RAILWAY_TOKEN" ]; then
+            echo "::error::RAILWAY_TOKEN secret not set. Add it under Settings → Secrets → Actions."
+            exit 1
+          fi
+
+          COMMIT_SHA="${{ github.sha }}"
+          echo "Deploying commit $COMMIT_SHA to service $SERVICE_ID"
+
+          PAYLOAD=$(jq -n \
+            --arg sid "$SERVICE_ID" \
+            --arg eid "$ENVIRONMENT_ID" \
+            --arg sha "$COMMIT_SHA" \
+            '{
+              query: "mutation($serviceId: String!, $environmentId: String!, $commitSha: String) { serviceInstanceDeploy(serviceId: $serviceId, environmentId: $environmentId, commitSha: $commitSha) }",
+              variables: { serviceId: $sid, environmentId: $eid, commitSha: $sha }
+            }')
+
+          RESPONSE=$(curl -sS -X POST https://backboard.railway.com/graphql/v2 \
+            -H "Content-Type: application/json" \
+            -H "Authorization: Bearer $RAILWAY_TOKEN" \
+            -d "$PAYLOAD")
+
+          echo "Railway response: $RESPONSE"
+          if echo "$RESPONSE" | grep -q '"errors"'; then
+            echo "::error::Railway deploy failed"
+            exit 1
+          fi
