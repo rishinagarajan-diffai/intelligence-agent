@@ -2,7 +2,6 @@
 builder = "DOCKERFILE"
 
 [deploy]
-startCommand = "uvicorn api:app --host 0.0.0.0 --port $PORT"
 healthcheckPath = "/docs"
 healthcheckTimeout = 30
 restartPolicyType = "ON_FAILURE"
