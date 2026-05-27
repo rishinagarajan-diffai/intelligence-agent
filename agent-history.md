@@ -9,6 +9,13 @@
 **How it helps:** `docker build` produces a deployable image. `DATABASE_URL` env var switches the entire persistence layer to Postgres — no other config needed. SQLite still works locally when `DATABASE_URL` is unset. `get_stale_market_context()` centralizes the SYSTEMIC-04 JSON query so it uses the right JSON dialect per backend (SQLite `json_extract` vs Postgres `jsonb`).
 **Traceback notes:** `_PgConn` wraps psycopg2 to expose the same `execute/executemany/commit/close` interface as sqlite3.Connection so all existing db callers work unchanged. Railway sets `$PORT` at runtime — CMD uses `${PORT:-8000}` so local `docker run` also works without setting PORT. `postgres://` URL prefix auto-corrected to `postgresql://` (Railway emits both).
 
+## 2026-05-27 — Auto-deploy wired via Railway GitHub App (free-tier path)
+
+**What changed:** `.github/workflows/deploy.yml` switched from `on: push` to `on: workflow_dispatch` (manual only); Railway GitHub App installed on the repo via dashboard.
+**Why:** Railway free-tier accounts can't mint API tokens with deploy permissions, so the GitHub Actions → Railway GraphQL path was blocked at the `RAILWAY_TOKEN` step. Railway's first-party GitHub App webhook works on free tier and doesn't need an API token at all.
+**How it helps:** Every push to `main` now triggers a Railway build automatically via webhook. Verified: commit `4d3ad5d` started building within seconds of push, with zero API calls. The manual `workflow_dispatch` workflow is kept as a fallback (useful if dashboard webhook breaks or for forced redeploys at a specific commit).
+**Traceback notes:** When a service is created via the Railway API with `source.repo`, Railway records the repo URL but does NOT install the GitHub App or wire the webhook. The dashboard's "Branch connected to production" message is misleading in this state — it shows the connection exists but the webhook never fires until a human installs the GitHub App via the OAuth flow. Two ways to fix: (1) Disconnect/Reconnect from the dashboard, or (2) install the app directly at `github.com/apps/railway-app/installations/new`. After install, also flip the "Auto Deploy" toggle on (separately from "Wait for CI" which should stay off until there are real tests).
+
 ## 2026-05-27 — Hardening pass: auth, rate limiting, vision coverage, Sentry, CI/CD
 
 **What changed:** `api.py` (X-API-Key auth + slowapi rate limits + optional Sentry), `requirements.txt` (+slowapi, +sentry-sdk[fastapi]), `scrapers/vision_extractor.py` (`_MAX_ADS` 25 → 50), `.github/workflows/deploy.yml` (new).

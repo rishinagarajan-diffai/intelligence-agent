@@ -72,7 +72,7 @@ python regen_dna.py
 
 **Observability:** if `SENTRY_DSN` env var is set on Railway, errors and slow requests are reported to Sentry. Currently unset — set it via the Railway dashboard or API to enable.
 
-**Auto-deploy:** `.github/workflows/deploy.yml` calls Railway's GraphQL `serviceInstanceDeploy` on every push to `main`, using the commit SHA. Requires `RAILWAY_TOKEN` GitHub secret (a PAT, not the OAuth token).
+**Auto-deploy:** Railway's GitHub App is installed on the repo with auto-deploy enabled — every push to `main` triggers a Railway build/deploy via webhook (no API token needed; works on free tier). The `.github/workflows/deploy.yml` is kept as a manual-trigger fallback (`workflow_dispatch`) for cases where the webhook needs bypassing.
 
 **Railway env vars set:** `GEMINI_API_KEY`, `DATABASE_URL=${{Postgres.DATABASE_URL}}`, `PORT=8000`, `API_KEY`.
 
@@ -342,8 +342,7 @@ ThoughtSpot delta (2026-05-27 vs 2026-05-26) detected: "Dashboards Are Dead. Try
 
 ## Next Steps
 
-1. Add `RAILWAY_TOKEN` GitHub secret to activate the auto-deploy workflow (one-time)
-2. Set `SENTRY_DSN` on Railway to enable error tracking
+1. Set `SENTRY_DSN` on Railway to enable error tracking
 3. Replace in-process `BackgroundTasks` with a real queue (ARQ + Redis) so jobs survive redeploys
 4. Re-run OpenAI, Anthropic, Rippling on hosted API to seed Postgres baselines
 5. Decide on hybrid model routing: 3.1 Pro for Phase 3 (Brand DNA + delta), Flash for analysis passes
