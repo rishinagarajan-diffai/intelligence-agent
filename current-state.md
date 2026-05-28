@@ -1,6 +1,6 @@
 # Campaign Intelligence Agent — Current State
 
-_Last updated: 2026-05-28 (model bump to gemini-3.5-flash on hosted services — verify tomorrow)_
+_Last updated: 2026-05-28 (gemini-3.5-flash VERIFIED end-to-end on hosted services; fixed Railway deploy-source wiring)_
 
 ---
 
@@ -231,6 +231,8 @@ intelligence-agent/
 
 ## DB Schema (storage/db.py)
 
+**Multi-tenancy:** every table carries `client_id TEXT NOT NULL DEFAULT 'default'` (added 2026-05-28). All writes/reads are scoped by `client_id`; the ads uniqueness is `UNIQUE(ad_id, advertiser, platform, client_id)`. Existing pre-multi-tenant rows backfill to `client_id='default'`. `client_id` arrives explicitly: `POST /analyze` body field, `?client_id=` query param on GET/regen endpoints, `--client-id` CLI flag (all default to `'default'`).
+
 **`ads`** — one row per scraped ad
 ```
 id, platform, advertiser, advertiser_type, ad_id, format,
@@ -267,6 +269,7 @@ id, advertiser, content, created_at
 
 | Advertiser | Platforms | DB ads | Output | Model | How run |
 |---|---|---|---|---|---|
+| Asana | google, linkedin | 148 | inline via `GET /jobs/{id}` | **gemini-3.5-flash** | **Hosted API (Railway)** — model-bump verification 2026-05-28 |
 | HubSpot | google, linkedin | 135 | inline via `GET /jobs/{id}` | gemini-2.5-flash | **Hosted API (Railway)** |
 | Salesforce | google, linkedin | 101 | `outputs/salesforce-brand-dna-2026-05-27.md` | gemini-3.1-pro-preview | API (`POST /analyze`) |
 | ThoughtSpot | google, linkedin | 80 | `outputs/thoughtspot-brand-dna-2026-05-27.md` | gemini-3.1-pro-preview | CLI |
@@ -315,7 +318,7 @@ Before this is production-ready as a service:
 
 1. **Meta Graph API approval** — pending since 2026-05-22; unblocks noise-free Meta scraping
 2. **Meta page-ID filtering** — post-filter by page name to remove keyword-match noise (interim fix)
-3. **`client_id` scoping** — no multi-tenancy in DB or scraper layer yet
+3. ~~**`client_id` scoping**~~ — DONE 2026-05-28 (code complete + locally tested; deploy + prod migration pending). All 5 tables + full pipeline now client-scoped. Next layer: derive `client_id` from API key (registry) once per-tenant keys are issued.
 4. **Scheduled re-scraping** — one-shot today; needs weekly refresh of `intel_signals`
 5. **`--limit` CLI flag** — scrape limit not tunable without editing source
 6. **LinkedIn auth** — image-only ads have no copy without authenticated scraping
@@ -349,11 +352,28 @@ ThoughtSpot delta (2026-05-27 vs 2026-05-26) detected: "Dashboards Are Dead. Try
 
 ---
 
+## Deploy-source wiring fix (2026-05-28)
+
+**Symptom:** Hosted API returned 502 ("Application failed to respond"); container crash-looping on `/start.sh: No such file or directory`.
+
+**Root cause (two compounding bugs):**
+1. The **`intelligence-api` service was deploying from the wrong GitHub repo** — `rishinagarajan-diffai/marketing-intelligence-agent` (the old origin remote), pinned at the stale Ollama-era commit `1d846b0` which has **no Dockerfile and no Gemini code**. The `intelligence-worker` service was already correctly pointed at `rishinagarajan-diffai/intelligence-agent`. All current code (Dockerfile, FastAPI, ARQ, Gemini) lives in `intelligence-agent`; local `main` was 18 commits ahead of `origin/main` (never pushed to the old repo). The successful 05-27 runs were direct `railway up` uploads, which masked this.
+2. Both services had **drifted to the `RAILPACK` builder**, ignoring the Dockerfile (and `railway.toml`'s `builder = "DOCKERFILE"`). Yesterday's `GEMINI_MODEL` env change triggered a git-based redeploy from the stale repo → regressed to old code built by Railpack → the leftover `/start.sh` start-command override pointed at a file the Railpack image didn't contain.
+
+**Fix applied (via Railway GraphQL `serviceInstanceUpdate`):**
+- Set `dockerfilePath = "Dockerfile"` on both services (forces a Dockerfile build over the Railpack builder — note the `Builder` enum has no `DOCKERFILE` value, so `dockerfilePath` is the lever).
+- Repointed `intelligence-api` source repo from `marketing-intelligence-agent` → `rishinagarajan-diffai/intelligence-agent`.
+- Redeployed both. API rebuilt from latest commit `284320b`, worker from `b40566b`; both SUCCESS.
+
+**Local git note:** the `origin` remote still points at the deprecated `marketing-intelligence-agent`; the canonical/current repo is the `public` remote (`intelligence-agent`). Consider re-pointing `origin` to avoid future confusion, and confirm the Railway GitHub App webhook fires on push to `intelligence-agent` (auto-deploy).
+
+---
+
 ## Next Steps
 
-1. Verify `gemini-3.5-flash` end-to-end on hosted services (run a fresh advertiser like Asana or Webflow tomorrow; if outputs degrade, revert via `GEMINI_MODEL=gemini-2.5-flash` env var)
+1. ✅ **DONE 2026-05-28** — `gemini-3.5-flash` verified end-to-end on hosted services. Asana run via `POST /analyze` → `complete` in 285s, 148 ads, 15,616-char Brand DNA, all 11 sections present, voice + synthetic templates on-brand. No structural drift. (Revert lever if needed: `GEMINI_MODEL=gemini-2.5-flash` env var.)
 2. Install Railway GitHub App webhook on the `intelligence-worker` service (currently API-only, worker needs manual `serviceInstanceDeploy` per push)
-3. Add `client_id` scoping for multi-tenant (currently single-tenant — two customers analyzing the same advertiser would collide)
+3. ✅ **DONE 2026-05-28 (code)** — `client_id` scoping across all 5 tables + pipeline (explicit field, backfill to `'default'`). Deploy + prod migration + two-client smoke test still pending.
 4. Per-tenant Gemini key or quota (currently one shared key for all callers)
 5. Set Google Cloud billing alert on the Gemini API project to cap spend
 6. Re-run OpenAI, Anthropic, Rippling on hosted API to seed Postgres baselines

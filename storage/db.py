@@ -64,6 +64,7 @@ _TABLES = [
     """\
 CREATE TABLE IF NOT EXISTS ads (
     id               {pk},
+    client_id        TEXT NOT NULL DEFAULT 'default',
     platform         TEXT NOT NULL,
     advertiser       TEXT NOT NULL,
     advertiser_type  TEXT NOT NULL DEFAULT 'client',
@@ -83,11 +84,12 @@ CREATE TABLE IF NOT EXISTS ads (
     visual_description TEXT,
     vision_extracted   INTEGER DEFAULT 0,
     ad_type            TEXT DEFAULT NULL,
-    UNIQUE(ad_id, advertiser, platform)
+    UNIQUE(ad_id, advertiser, platform, client_id)
 )""",
     """\
 CREATE TABLE IF NOT EXISTS analysis_results (
     id          {pk},
+    client_id   TEXT NOT NULL DEFAULT 'default',
     advertiser  TEXT NOT NULL,
     pass_name   TEXT NOT NULL,
     result_json TEXT NOT NULL,
@@ -96,6 +98,7 @@ CREATE TABLE IF NOT EXISTS analysis_results (
     """\
 CREATE TABLE IF NOT EXISTS brand_dna (
     id          {pk},
+    client_id   TEXT NOT NULL DEFAULT 'default',
     advertiser  TEXT NOT NULL,
     content     TEXT NOT NULL,
     created_at  TEXT NOT NULL
@@ -103,6 +106,7 @@ CREATE TABLE IF NOT EXISTS brand_dna (
     """\
 CREATE TABLE IF NOT EXISTS jobs (
     id           TEXT PRIMARY KEY,
+    client_id    TEXT NOT NULL DEFAULT 'default',
     advertiser   TEXT NOT NULL,
     competitors  TEXT NOT NULL DEFAULT '[]',
     platforms    TEXT NOT NULL DEFAULT '["google","linkedin"]',
@@ -115,6 +119,7 @@ CREATE TABLE IF NOT EXISTS jobs (
     """\
 CREATE TABLE IF NOT EXISTS intel_signals (
     id          {pk},
+    client_id   TEXT NOT NULL DEFAULT 'default',
     advertiser  TEXT NOT NULL,
     content     TEXT NOT NULL,
     created_at  TEXT NOT NULL
@@ -135,7 +140,7 @@ def init_db() -> None:
 # Writes
 # ---------------------------------------------------------------------------
 
-def save_ads(ads: list[dict], advertiser_type: str = "client") -> None:
+def save_ads(ads: list[dict], advertiser_type: str = "client", client_id: str = "default") -> None:
     if not ads:
         return
     conn = get_connection()
@@ -152,27 +157,27 @@ def save_ads(ads: list[dict], advertiser_type: str = "client") -> None:
     _platform = ads[0].get("platform", "")
     if _advertiser and _platform:
         conn.execute(
-            "DELETE FROM ads WHERE advertiser = ? AND platform = ?",
-            (_advertiser, _platform),
+            "DELETE FROM ads WHERE advertiser = ? AND platform = ? AND client_id = ?",
+            (_advertiser, _platform, client_id),
         )
 
-    keyed = [(ad.get("ad_id"), ad.get("advertiser"), ad.get("platform")) for ad in ads if ad.get("ad_id")]
+    keyed = [(ad.get("ad_id"), ad.get("advertiser"), ad.get("platform"), client_id) for ad in ads if ad.get("ad_id")]
     if keyed:
         conn.executemany(
-            "DELETE FROM ads WHERE ad_id = ? AND advertiser = ? AND platform = ?",
+            "DELETE FROM ads WHERE ad_id = ? AND advertiser = ? AND platform = ? AND client_id = ?",
             keyed,
         )
     conn.executemany(
         """
         INSERT INTO ads (
-            platform, advertiser, advertiser_type, ad_id, format, headline,
+            client_id, platform, advertiser, advertiser_type, ad_id, format, headline,
             primary_text, description, cta, image_url, video_url, start_date,
             end_date, impressions_range, scraped_at, raw_json
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         [
             (
-                ad.get("platform"), ad.get("advertiser"), advertiser_type,
+                client_id, ad.get("platform"), ad.get("advertiser"), advertiser_type,
                 ad.get("ad_id"), ad.get("format"), ad.get("headline"),
                 ad.get("primary_text"), ad.get("description"), ad.get("cta"),
                 ad.get("image_url"), ad.get("video_url"), ad.get("start_date"),
@@ -186,56 +191,56 @@ def save_ads(ads: list[dict], advertiser_type: str = "client") -> None:
     conn.close()
 
 
-def save_analysis(advertiser: str, pass_name: str, result: dict) -> None:
+def save_analysis(advertiser: str, pass_name: str, result: dict, client_id: str = "default") -> None:
     conn = get_connection()
     conn.execute(
-        "INSERT INTO analysis_results (advertiser, pass_name, result_json, created_at) VALUES (?, ?, ?, ?)",
-        (advertiser, pass_name, json.dumps(result), datetime.utcnow().isoformat()),
+        "INSERT INTO analysis_results (client_id, advertiser, pass_name, result_json, created_at) VALUES (?, ?, ?, ?, ?)",
+        (client_id, advertiser, pass_name, json.dumps(result), datetime.utcnow().isoformat()),
     )
     conn.commit()
     conn.close()
 
 
-def save_brand_dna(advertiser: str, content: str) -> None:
+def save_brand_dna(advertiser: str, content: str, client_id: str = "default") -> None:
     conn = get_connection()
-    conn.execute("DELETE FROM brand_dna WHERE advertiser = ?", (advertiser,))
+    conn.execute("DELETE FROM brand_dna WHERE advertiser = ? AND client_id = ?", (advertiser, client_id))
     conn.execute(
-        "INSERT INTO brand_dna (advertiser, content, created_at) VALUES (?, ?, ?)",
-        (advertiser, content, datetime.utcnow().isoformat()),
+        "INSERT INTO brand_dna (client_id, advertiser, content, created_at) VALUES (?, ?, ?, ?)",
+        (client_id, advertiser, content, datetime.utcnow().isoformat()),
     )
     conn.commit()
     conn.close()
 
 
-def update_ad_type(ad_id: str, advertiser: str, ad_type: str) -> None:
+def update_ad_type(ad_id: str, advertiser: str, ad_type: str, client_id: str = "default") -> None:
     if not ad_id:
         return
     conn = get_connection()
     conn.execute(
-        "UPDATE ads SET ad_type = ? WHERE ad_id = ? AND advertiser = ?",
-        (ad_type, ad_id, advertiser),
+        "UPDATE ads SET ad_type = ? WHERE ad_id = ? AND advertiser = ? AND client_id = ?",
+        (ad_type, ad_id, advertiser, client_id),
     )
     conn.commit()
     conn.close()
 
 
-def update_ad_vision(ad_id: str, advertiser: str, headline: str, primary_text: str, cta: str, visual_description: str) -> None:
+def update_ad_vision(ad_id: str, advertiser: str, headline: str, primary_text: str, cta: str, visual_description: str, client_id: str = "default") -> None:
     conn = get_connection()
     conn.execute(
         """UPDATE ads SET headline = ?, primary_text = ?, cta = ?,
            visual_description = ?, vision_extracted = 1
-           WHERE ad_id = ? AND advertiser = ? AND vision_extracted = 0""",
-        (headline, primary_text, cta, visual_description, ad_id, advertiser),
+           WHERE ad_id = ? AND advertiser = ? AND client_id = ? AND vision_extracted = 0""",
+        (headline, primary_text, cta, visual_description, ad_id, advertiser, client_id),
     )
     conn.commit()
     conn.close()
 
 
-def create_job(job_id: str, advertiser: str, competitors: list[str], platforms: list[str], scenario: str | None) -> None:
+def create_job(job_id: str, advertiser: str, competitors: list[str], platforms: list[str], scenario: str | None, client_id: str = "default") -> None:
     conn = get_connection()
     conn.execute(
-        "INSERT INTO jobs (id, advertiser, competitors, platforms, scenario, status, created_at) VALUES (?, ?, ?, ?, ?, 'queued', ?)",
-        (job_id, advertiser, json.dumps(competitors), json.dumps(platforms), scenario, datetime.utcnow().isoformat()),
+        "INSERT INTO jobs (id, client_id, advertiser, competitors, platforms, scenario, status, created_at) VALUES (?, ?, ?, ?, ?, ?, 'queued', ?)",
+        (job_id, client_id, advertiser, json.dumps(competitors), json.dumps(platforms), scenario, datetime.utcnow().isoformat()),
     )
     conn.commit()
     conn.close()
@@ -252,11 +257,11 @@ def update_job(job_id: str, status: str, error: str | None = None) -> None:
     conn.close()
 
 
-def save_intel_signal(advertiser: str, content: str) -> None:
+def save_intel_signal(advertiser: str, content: str, client_id: str = "default") -> None:
     conn = get_connection()
     conn.execute(
-        "INSERT INTO intel_signals (advertiser, content, created_at) VALUES (?, ?, ?)",
-        (advertiser, content, datetime.utcnow().isoformat()),
+        "INSERT INTO intel_signals (client_id, advertiser, content, created_at) VALUES (?, ?, ?, ?)",
+        (client_id, advertiser, content, datetime.utcnow().isoformat()),
     )
     conn.commit()
     conn.close()
@@ -266,11 +271,11 @@ def save_intel_signal(advertiser: str, content: str) -> None:
 # Reads
 # ---------------------------------------------------------------------------
 
-def get_brand_dna(advertiser: str) -> dict | None:
+def get_brand_dna(advertiser: str, client_id: str = "default") -> dict | None:
     conn = get_connection()
     row = conn.execute(
-        "SELECT content, created_at FROM brand_dna WHERE advertiser = ? ORDER BY id DESC LIMIT 1",
-        (advertiser,),
+        "SELECT content, created_at FROM brand_dna WHERE advertiser = ? AND client_id = ? ORDER BY id DESC LIMIT 1",
+        (advertiser, client_id),
     ).fetchone()
     conn.close()
     return dict(row) if row else None
@@ -283,47 +288,47 @@ def get_job(job_id: str) -> dict | None:
     return dict(row) if row else None
 
 
-def get_latest_intel_signal(advertiser: str) -> dict | None:
+def get_latest_intel_signal(advertiser: str, client_id: str = "default") -> dict | None:
     conn = get_connection()
     row = conn.execute(
-        "SELECT content, created_at FROM intel_signals WHERE advertiser = ? ORDER BY id DESC LIMIT 1",
-        (advertiser,),
+        "SELECT content, created_at FROM intel_signals WHERE advertiser = ? AND client_id = ? ORDER BY id DESC LIMIT 1",
+        (advertiser, client_id),
     ).fetchone()
     conn.close()
     return dict(row) if row else None
 
 
-def get_ads(advertiser: str) -> list[dict]:
+def get_ads(advertiser: str, client_id: str = "default") -> list[dict]:
     conn = get_connection()
-    rows = conn.execute("SELECT * FROM ads WHERE advertiser = ?", (advertiser,)).fetchall()
+    rows = conn.execute("SELECT * FROM ads WHERE advertiser = ? AND client_id = ?", (advertiser, client_id)).fetchall()
     conn.close()
     return [dict(row) for row in rows]
 
 
-def get_ads_platforms(advertiser: str) -> list[str]:
+def get_ads_platforms(advertiser: str, client_id: str = "default") -> list[str]:
     conn = get_connection()
     rows = conn.execute(
-        "SELECT DISTINCT platform FROM ads WHERE advertiser = ?", (advertiser,)
+        "SELECT DISTINCT platform FROM ads WHERE advertiser = ? AND client_id = ?", (advertiser, client_id)
     ).fetchall()
     conn.close()
     return [r["platform"] for r in rows if r["platform"]]
 
 
-def get_latest_analysis(advertiser: str) -> tuple[dict, str, int]:
+def get_latest_analysis(advertiser: str, client_id: str = "default") -> tuple[dict, str, int]:
     """Return (analysis_by_pass, run_date, ad_count) for the most recent run."""
     conn = get_connection()
     rows = conn.execute(
         """
         SELECT pass_name, result_json, created_at
         FROM analysis_results
-        WHERE advertiser = ?
+        WHERE advertiser = ? AND client_id = ?
           AND id IN (
               SELECT MAX(id) FROM analysis_results
-              WHERE advertiser = ?
+              WHERE advertiser = ? AND client_id = ?
               GROUP BY pass_name
           )
         """,
-        (advertiser, advertiser),
+        (advertiser, client_id, advertiser, client_id),
     ).fetchall()
     conn.close()
     if not rows:
@@ -336,7 +341,7 @@ def get_latest_analysis(advertiser: str) -> tuple[dict, str, int]:
     return by_pass, run_date, ad_count
 
 
-def get_stale_market_context(advertiser: str) -> dict | None:
+def get_stale_market_context(advertiser: str, client_id: str = "default") -> dict | None:
     """Return the most recent non-empty market_context result from DB (SYSTEMIC-04 fallback).
 
     Uses backend-appropriate JSON array length check.
@@ -350,10 +355,10 @@ def get_stale_market_context(advertiser: str) -> dict | None:
     conn = get_connection()
     row = conn.execute(
         f"""SELECT result_json, created_at FROM analysis_results
-            WHERE advertiser = ? AND pass_name = 'market_context'
+            WHERE advertiser = ? AND client_id = ? AND pass_name = 'market_context'
               AND {json_filter}
             ORDER BY id DESC LIMIT 1""",
-        (advertiser,),
+        (advertiser, client_id),
     ).fetchone()
     conn.close()
     if not row:
@@ -396,11 +401,35 @@ def migrate_columns(console=None) -> None:
                 conn.execute(f"ALTER TABLE ads ADD COLUMN {col} {defn}")
                 added.append(col)
 
+    # client_id multi-tenancy column on every table. DEFAULT 'default' backfills
+    # existing single-tenant rows so prior data stays readable under the default client.
+    _tenant_tables = ["ads", "analysis_results", "brand_dna", "jobs", "intel_signals"]
+    if _is_postgres:
+        for t in _tenant_tables:
+            conn.execute(f"ALTER TABLE {t} ADD COLUMN IF NOT EXISTS client_id TEXT NOT NULL DEFAULT 'default'")
+        # Widen the ads uniqueness to include client_id so two clients can each
+        # store the same ad. The original constraint follows Postgres' default
+        # naming for UNIQUE(ad_id, advertiser, platform).
+        conn.execute("ALTER TABLE ads DROP CONSTRAINT IF EXISTS ads_ad_id_advertiser_platform_key")
+        conn.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS ads_uniq_client "
+            "ON ads (ad_id, advertiser, platform, client_id)"
+        )
+    else:
+        for t in _tenant_tables:
+            cols = {row[1] for row in conn.execute(f"PRAGMA table_info({t})").fetchall()}
+            if "client_id" not in cols:
+                conn.execute(f"ALTER TABLE {t} ADD COLUMN client_id TEXT NOT NULL DEFAULT 'default'")
+                added.append(f"{t}.client_id")
+        # SQLite can't ALTER a UNIQUE constraint in place; existing local dev DBs
+        # keep the old (ad_id, advertiser, platform) uniqueness, which is fine for
+        # single-client dev. Fresh DBs pick up the client_id-scoped constraint via init_db.
+
     cursor = conn.execute("""
         DELETE FROM ads WHERE id NOT IN (
             SELECT MAX(id) FROM ads
             WHERE ad_id IS NOT NULL
-            GROUP BY ad_id, advertiser, platform
+            GROUP BY ad_id, advertiser, platform, client_id
         ) AND ad_id IS NOT NULL
     """)
     deduped = cursor.rowcount if hasattr(cursor, "rowcount") else 0

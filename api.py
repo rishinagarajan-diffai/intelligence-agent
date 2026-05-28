@@ -96,6 +96,7 @@ async def _get_redis_pool():
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     db.init_db()
+    db.migrate_columns()  # add client_id (and other post-deploy columns) to existing tables
     yield
     if _redis_pool is not None:
         await _redis_pool.close()
@@ -115,11 +116,13 @@ class AnalyzeRequest(BaseModel):
     competitors: list[str] = Field(default_factory=list)
     platforms: list[str] = Field(default=["google", "linkedin"])
     scenario: str | None = None
+    client_id: str = "default"
 
 
 class JobResponse(BaseModel):
     job_id: str
     status: str
+    client_id: str
     advertiser: str
     competitors: list[str]
     platforms: list[str]
@@ -149,10 +152,11 @@ async def analyze(request: Request, req: AnalyzeRequest):
         competitors=req.competitors,
         platforms=req.platforms,
         scenario=req.scenario,
+        client_id=req.client_id,
     )
     await pool.enqueue_job(
         "run_pipeline",
-        job_id, req.advertiser, req.competitors, req.platforms, req.scenario,
+        job_id, req.advertiser, req.competitors, req.platforms, req.scenario, req.client_id,
     )
     return {"job_id": job_id, "status": "queued"}
 
@@ -164,9 +168,11 @@ async def get_job(request: Request, job_id: str):
     if not row:
         raise HTTPException(status_code=404, detail="job not found")
 
+    client_id = row.get("client_id", "default")
     result: dict = {
         "job_id": row["id"],
         "status": row["status"],
+        "client_id": client_id,
         "advertiser": row["advertiser"],
         "competitors": json.loads(row["competitors"]),
         "platforms": json.loads(row["platforms"]),
@@ -177,10 +183,10 @@ async def get_job(request: Request, job_id: str):
     }
 
     if row["status"] == "complete":
-        dna = db.get_brand_dna(row["advertiser"])
+        dna = db.get_brand_dna(row["advertiser"], client_id)
         if dna:
             result["brand_dna"] = dna["content"]
-        sig = db.get_latest_intel_signal(row["advertiser"])
+        sig = db.get_latest_intel_signal(row["advertiser"], client_id)
         if sig:
             result["intel_signal"] = sig["content"]
 
@@ -189,38 +195,38 @@ async def get_job(request: Request, job_id: str):
 
 @app.get("/brand-dna/{advertiser}", dependencies=[Depends(require_api_key)])
 @limiter.limit("30/minute")
-async def get_brand_dna(request: Request, advertiser: str):
-    row = db.get_brand_dna(advertiser)
+async def get_brand_dna(request: Request, advertiser: str, client_id: str = "default"):
+    row = db.get_brand_dna(advertiser, client_id)
     if not row:
         raise HTTPException(status_code=404, detail="no brand DNA found for this advertiser")
-    return {"advertiser": advertiser, "content": row["content"], "created_at": row["created_at"]}
+    return {"client_id": client_id, "advertiser": advertiser, "content": row["content"], "created_at": row["created_at"]}
 
 
 @app.get("/intel-signal/{advertiser}", dependencies=[Depends(require_api_key)])
 @limiter.limit("30/minute")
-async def get_intel_signal(request: Request, advertiser: str):
-    row = db.get_latest_intel_signal(advertiser)
+async def get_intel_signal(request: Request, advertiser: str, client_id: str = "default"):
+    row = db.get_latest_intel_signal(advertiser, client_id)
     if not row:
         raise HTTPException(status_code=404, detail="no intel signal found for this advertiser")
-    return {"advertiser": advertiser, "content": row["content"], "created_at": row["created_at"]}
+    return {"client_id": client_id, "advertiser": advertiser, "content": row["content"], "created_at": row["created_at"]}
 
 
 @app.post("/regen/{advertiser}", dependencies=[Depends(require_api_key)])
 @limiter.limit("10/hour")
-async def regen(request: Request, advertiser: str):
+async def regen(request: Request, advertiser: str, client_id: str = "default"):
     """Regenerate brand DNA from existing DB data — skips scraping and analysis (~30s)."""
     from datetime import date
     from generator import markdown as md_generator
 
     analysis = {
         row["pass_name"]: json.loads(row["result_json"])
-        for row in _db_latest_analysis_rows(advertiser)
+        for row in _db_latest_analysis_rows(advertiser, client_id)
     }
     if not analysis:
         raise HTTPException(status_code=404, detail="no analysis data found for this advertiser")
 
-    ads = db.get_ads(advertiser)
-    platforms = db.get_ads_platforms(advertiser)
+    ads = db.get_ads(advertiser, client_id)
+    platforms = db.get_ads_platforms(advertiser, client_id)
 
     try:
         content = await md_generator.generate(
@@ -234,21 +240,21 @@ async def regen(request: Request, advertiser: str):
     except Exception as exc:
         raise HTTPException(status_code=500, detail=str(exc))
 
-    db.save_brand_dna(advertiser, content)
-    return {"advertiser": advertiser, "brand_dna": content}
+    db.save_brand_dna(advertiser, content, client_id)
+    return {"client_id": client_id, "advertiser": advertiser, "brand_dna": content}
 
 
-def _db_latest_analysis_rows(advertiser: str) -> list:
+def _db_latest_analysis_rows(advertiser: str, client_id: str = "default") -> list:
     conn = db.get_connection()
     rows = conn.execute(
         """SELECT pass_name, result_json FROM analysis_results
-           WHERE advertiser = ?
+           WHERE advertiser = ? AND client_id = ?
              AND id IN (
                  SELECT MAX(id) FROM analysis_results
-                 WHERE advertiser = ?
+                 WHERE advertiser = ? AND client_id = ?
                  GROUP BY pass_name
              )""",
-        (advertiser, advertiser),
+        (advertiser, client_id, advertiser, client_id),
     ).fetchall()
     conn.close()
     return rows

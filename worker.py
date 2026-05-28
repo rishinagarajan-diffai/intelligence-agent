@@ -33,7 +33,7 @@ from storage import db
 REDIS_URL = os.environ.get("REDIS_URL", "")
 
 
-async def run_pipeline(ctx, job_id: str, advertiser: str, competitors: list[str], platforms: list[str], scenario: str | None):
+async def run_pipeline(ctx, job_id: str, advertiser: str, competitors: list[str], platforms: list[str], scenario: str | None, client_id: str = "default"):
     db.update_job(job_id, "running")
     try:
         import main as pipeline
@@ -42,6 +42,7 @@ async def run_pipeline(ctx, job_id: str, advertiser: str, competitors: list[str]
             competitors=competitors,
             platforms=platforms,
             scenario=scenario,
+            client_id=client_id,
         )
         db.update_job(job_id, "complete")
     except Exception as exc:
@@ -54,6 +55,7 @@ async def run_pipeline(ctx, job_id: str, advertiser: str, competitors: list[str]
 
 async def startup(ctx):
     db.init_db()
+    db.migrate_columns()  # add client_id (and other post-deploy columns) to existing tables
 
 
 class WorkerSettings:

@@ -710,6 +710,7 @@ async def run_all_passes(
     competitor_ads: dict[str, list[dict]],
     console=None,
     scenario: str | None = None,
+    client_id: str = "default",
 ) -> dict[str, Any]:
     if not client_ads:
         if console:
@@ -753,7 +754,7 @@ async def run_all_passes(
     if not market_context:
         from storage.db import get_stale_market_context
         try:
-            cached = get_stale_market_context(advertiser)
+            cached = get_stale_market_context(advertiser, client_id)
             if cached:
                 stale_date = cached.get("market_summary", "")[:10]
                 market_context = cached

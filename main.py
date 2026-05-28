@@ -94,9 +94,10 @@ def _parse_impressions(imp_range: str | None) -> int:
 # Main orchestration
 # ---------------------------------------------------------------------------
 
-async def run(advertiser: str, competitors: list[str], platforms: list[str], scenario: str | None = None) -> None:
+async def run(advertiser: str, competitors: list[str], platforms: list[str], scenario: str | None = None, client_id: str = "default") -> None:
     console.print(Panel(
         f"[bold white]Campaign Intelligence Agent[/bold white]\n\n"
+        f"  Client      : [cyan]{client_id}[/cyan]\n"
         f"  Advertiser  : [cyan]{advertiser}[/cyan]\n"
         f"  Competitors : [cyan]{', '.join(competitors) or 'none'}[/cyan]\n"
         f"  Platforms   : [yellow]{', '.join(platforms)}[/yellow]\n"
@@ -144,7 +145,7 @@ async def run(advertiser: str, competitors: list[str], platforms: list[str], sce
 
             a_type = "client" if name == advertiser else "competitor"
             if ads:
-                db.save_ads(ads, a_type)
+                db.save_ads(ads, a_type, client_id)
 
             status = "[green]✓[/green]" if ads else "[yellow]empty[/yellow]"
             results_table.add_row(name, platform, str(len(ads)), status)
@@ -185,6 +186,7 @@ async def run(advertiser: str, competitors: list[str], platforms: list[str], sce
                         ad.get("primary_text", "") or "",
                         ad.get("cta", "") or "",
                         ad.get("visual_description", "") or "",
+                        client_id,
                     )
 
         extracted = sum(
@@ -231,27 +233,27 @@ async def run(advertiser: str, competitors: list[str], platforms: list[str], sce
     console.rule("[bold bright_blue]Phase 2 — Analysis (6 passes)")
 
     analysis = await analysis_agent.run_all_passes(
-        advertiser, client_ads, competitor_ads, console, scenario=scenario
+        advertiser, client_ads, competitor_ads, console, scenario=scenario, client_id=client_id
     )
 
     # Persist ad_type classifications to DB
     type_map = analysis.get("type_map", {})
     if type_map:
         for ad_id, ad_type in type_map.items():
-            db.update_ad_type(ad_id, advertiser, ad_type)
+            db.update_ad_type(ad_id, advertiser, ad_type, client_id)
         console.print(f"  [dim]Updated ad_type for {len(type_map)} ads[/dim]")
 
     # Fetch the previous analysis snapshot BEFORE saving the new one —
     # get_latest_analysis() returns the highest-id row per pass, which is the previous run.
     from storage.db import get_latest_analysis
-    prev_analysis, prev_date, prev_ad_count = get_latest_analysis(advertiser)
+    prev_analysis, prev_date, prev_ad_count = get_latest_analysis(advertiser, client_id)
 
     # Save analysis passes. type_distribution is saved here (not skipped) so future
     # delta runs can reconstruct ad count from the DB.
     for pass_name, result in analysis.items():
         if pass_name == "type_map":
             continue
-        db.save_analysis(advertiser, pass_name, result)
+        db.save_analysis(advertiser, pass_name, result, client_id)
 
     console.print(f"[green]✓[/green] All 7 analysis passes complete\n")
 
@@ -298,7 +300,7 @@ async def run(advertiser: str, competitors: list[str], platforms: list[str], sce
     )
 
     output_path.write_text(content, encoding="utf-8")
-    db.save_brand_dna(advertiser, content)
+    db.save_brand_dna(advertiser, content, client_id)
 
     # -----------------------------------------------------------------------
     # Delta signal report (only when a previous run exists)
@@ -318,7 +320,7 @@ async def run(advertiser: str, competitors: list[str], platforms: list[str], sce
             )
             delta_path = Path("outputs") / f"{slug}-intel-signal-{today}.md"
             delta_path.write_text(delta_content, encoding="utf-8")
-            db.save_intel_signal(advertiser, delta_content)
+            db.save_intel_signal(advertiser, delta_content, client_id)
             console.print(f"  [dim]Signal delta written to {delta_path}[/dim]")
         except Exception as exc:
             console.print(f"  [yellow]Warning: delta generation failed ({exc!r}) — skipping[/yellow]")
@@ -371,6 +373,12 @@ Examples:
         help="Primary advertiser to analyze (e.g. 'Notion')",
     )
     parser.add_argument(
+        "--client-id",
+        default="default",
+        metavar="ID",
+        help="Tenant identifier — scopes all scraped ads, analysis, and Brand DNA to this client (default: 'default').",
+    )
+    parser.add_argument(
         "--competitors",
         nargs="*",
         default=[],
@@ -398,7 +406,7 @@ Examples:
     if not args.competitors:
         import sys as _sys
         print("Note: no --competitors specified — competitive gap analysis will be skipped.", file=_sys.stderr)
-    asyncio.run(run(args.advertiser, args.competitors, args.platforms, scenario=args.scenario))
+    asyncio.run(run(args.advertiser, args.competitors, args.platforms, scenario=args.scenario, client_id=args.client_id))
 
 
 if __name__ == "__main__":
