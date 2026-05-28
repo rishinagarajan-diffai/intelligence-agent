@@ -1,0 +1,60 @@
+name: CI
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+jobs:
+  smoke-test:
+    name: Import smoke test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install Python deps
+        run: pip install -r requirements.txt
+
+      - name: Import api + worker (catches the {N}-KeyError class of bug)
+        run: |
+          python -c "import api; print('api import OK')"
+          python -c "import worker; print('worker import OK')"
+
+      - name: DB schema init (catches Postgres/SQLite dialect drift)
+        run: python -c "from storage import db; db.init_db(); print('init_db OK')"
+
+      - name: Worker config sanity
+        run: |
+          python -c "
+          import worker
+          assert worker.WorkerSettings.max_jobs == 1, 'max_jobs drifted'
+          assert worker.WorkerSettings.max_tries == 1, 'max_tries drifted'
+          assert worker.WorkerSettings.job_timeout == 900, 'job_timeout drifted'
+          assert any(f.__name__ == 'run_pipeline' for f in worker.WorkerSettings.functions), 'run_pipeline missing'
+          print('worker config OK')
+          "
+
+  docker-build:
+    name: Dockerfile builds
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build image (no push)
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          push: false
+          tags: intelligence-agent:ci
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
