@@ -1,6 +1,6 @@
 # Campaign Intelligence Agent — Current State
 
-_Last updated: 2026-05-27 (Sentry active w/ full perf tracing; webhook auto-deploy verified)_
+_Last updated: 2026-05-28 (Redis-backed worker live — jobs survive restarts)_
 
 ---
 
@@ -74,7 +74,15 @@ python regen_dna.py
 
 **Auto-deploy:** Railway's GitHub App is installed on the repo with auto-deploy enabled — every push to `main` triggers a Railway build/deploy via webhook (no API token needed; works on free tier). The `.github/workflows/deploy.yml` is kept as a manual-trigger fallback (`workflow_dispatch`) for cases where the webhook needs bypassing.
 
-**Railway env vars set:** `GEMINI_API_KEY`, `DATABASE_URL=${{Postgres.DATABASE_URL}}`, `PORT=8000`, `API_KEY`, `SENTRY_DSN`.
+**Railway env vars set:** `GEMINI_API_KEY`, `DATABASE_URL=${{Postgres.DATABASE_URL}}`, `REDIS_URL=${{Redis.REDIS_URL}}`, `PORT=8000`, `API_KEY`, `SENTRY_DSN`.
+
+**Railway services:**
+- `intelligence-api` (Dockerfile, `SERVICE_MODE=api`) — public HTTP API
+- `intelligence-worker` (same Dockerfile, `SERVICE_MODE=worker`) — ARQ worker, no public domain
+- `Postgres` (addon) — persistent storage
+- `Redis` (addon) — ARQ job queue
+
+Jobs submitted via `POST /analyze` go into the Redis queue; the worker pulls and executes them. API restarts (every push, env var change, Railway eviction) no longer kill in-flight jobs.
 
 ### API — Local
 
@@ -311,8 +319,7 @@ Before this is production-ready as a service:
 4. **Scheduled re-scraping** — one-shot today; needs weekly refresh of `intel_signals`
 5. **`--limit` CLI flag** — scrape limit not tunable without editing source
 6. **LinkedIn auth** — image-only ads have no copy without authenticated scraping
-7. **In-process BackgroundTasks** — `_run_pipeline` runs inside the FastAPI worker. If Railway redeploys mid-job, the job is lost; the DB row stays `running` forever (no timeout). Fix: external task queue (ARQ/Redis or Cloud Tasks) before exposing to real users.
-8. **GEMINI_API_KEY is shared across all callers** — no per-tenant quotas; one noisy user can exhaust the quota.
+7. **GEMINI_API_KEY is shared across all callers** — no per-tenant quotas; one noisy user can exhaust the quota.
 
 ✅ **Resolved this session:**
 - ~~SQLite → Postgres~~ — dual-backend; Postgres active in prod
@@ -324,6 +331,7 @@ Before this is production-ready as a service:
 - ~~Vision coverage~~ — top 25 → top 50 image-only ads
 - ~~Error observability~~ — Sentry active w/ full perf tracing (`traces_sample_rate=1.0`)
 - ~~GitHub auto-deploy~~ — `.github/workflows/deploy.yml` calls Railway GraphQL on push (needs `RAILWAY_TOKEN` secret)
+- ~~In-process BackgroundTasks~~ — Redis-backed ARQ worker; jobs survive API restarts (verified end-to-end with Notion run)
 
 ---
 
@@ -342,7 +350,7 @@ ThoughtSpot delta (2026-05-27 vs 2026-05-26) detected: "Dashboards Are Dead. Try
 
 ## Next Steps
 
-1. Replace in-process `BackgroundTasks` with a real queue (ARQ + Redis) so jobs survive redeploys — top remaining POC blocker
+1. Install Railway GitHub App webhook on the `intelligence-worker` service (currently API-only, worker needs manual `serviceInstanceDeploy` per push)
 2. Add `client_id` scoping for multi-tenant (currently single-tenant — two customers analyzing the same advertiser would collide)
 3. Per-tenant Gemini key or quota (currently one shared key for all callers)
 4. Set Google Cloud billing alert on the Gemini API project to cap spend
