@@ -12,6 +12,9 @@ outputs/
 # Internal planning docs
 PLAN.md
 
+# Local pipeline logs
+logs/
+
 # Python
 .venv/
 __pycache__/
