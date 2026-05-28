@@ -1,6 +1,6 @@
 # Campaign Intelligence Agent — Current State
 
-_Last updated: 2026-05-28 (Redis-backed worker live — jobs survive restarts)_
+_Last updated: 2026-05-28 (CI checks live — import smoke + Docker build on PR/push)_
 
 ---
 
@@ -332,6 +332,7 @@ Before this is production-ready as a service:
 - ~~Error observability~~ — Sentry active w/ full perf tracing (`traces_sample_rate=1.0`)
 - ~~GitHub auto-deploy~~ — `.github/workflows/deploy.yml` calls Railway GraphQL on push (needs `RAILWAY_TOKEN` secret)
 - ~~In-process BackgroundTasks~~ — Redis-backed ARQ worker; jobs survive API restarts (verified end-to-end with Notion run)
+- ~~CI checks~~ — `.github/workflows/ci.yml` runs import smoke + Docker build on every PR/push; first run green in 3m40s
 
 ---
 
