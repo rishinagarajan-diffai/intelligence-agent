@@ -16,12 +16,20 @@ In ~12 hours the project went from a CLI tool that wrote markdown files locally 
 - **CI/CD:** Railway GitHub App webhook on the API service (push → auto-deploy), GitHub Actions workflow runs import smoke test + Docker build on every PR/push.
 - **Repo:** new public GitHub repo (`rishinagarajan-diffai/intelligence-agent`) with full source.
 - **Quality:** vision extraction bumped from top 25 → top 50 image-only ads per run.
+- **Model:** default bumped from `gemini-2.5-flash` → `gemini-3.5-flash` on hosted services (smoke test deferred — run a fresh advertiser tomorrow to confirm output quality holds).
 
-Verified end-to-end live: HubSpot run (135 ads, 16.3k chars), Salesforce (101 ads, 16.6k chars), Notion via the new worker queue (141 ads, 12.9k chars).
+Verified end-to-end live: HubSpot run (135 ads, 16.3k chars), Salesforce (101 ads, 16.6k chars), Notion via the new worker queue (141 ads, 12.9k chars). All three pre-date the model bump.
 
-Remaining POC gaps: single-tenant (no `client_id` scoping), shared Gemini key (no per-tenant quotas), Meta Ad Library still blocked on API approval, worker doesn't yet have the GitHub App webhook (manual `serviceInstanceDeploy` per push), no Google Cloud billing alert on the Gemini key yet.
+Remaining POC gaps: single-tenant (no `client_id` scoping), shared Gemini key (no per-tenant quotas), Meta Ad Library still blocked on API approval, worker doesn't yet have the GitHub App webhook (manual `serviceInstanceDeploy` per push), no Google Cloud billing alert on the Gemini key yet, and `gemini-3.5-flash` not yet verified end-to-end on hosted services.
 
 ---
+
+## 2026-05-28 — Model bump: gemini-2.5-flash → gemini-3.5-flash
+
+**What changed:** Set `GEMINI_MODEL=gemini-3.5-flash` env var on both Railway services (`intelligence-api` and `intelligence-worker`). No code changes — the model is read from env at runtime by `analysis/agent.py`, `generator/markdown.py`, `generator/delta.py`, and `scrapers/vision_extractor.py`.
+**Why:** `gemini-3.5-flash` is now publicly available on the Gemini API (verified via `GET /v1beta/models`). Newer Flash variants typically have better instruction-following at similar latency/cost — worth picking up by default.
+**How it helps:** All analyze passes (voice fingerprint, angles, funnel, visual, structure, market context, synthetic ad generator), the Brand DNA markdown generator, the intel signal delta generator, and the vision extractor for image-only ads will all use `gemini-3.5-flash` on the next pipeline run. Local CLI runs still default to `gemini-2.5-flash` unless `.env` is updated locally.
+**Traceback notes:** Both Railway services rebuilt and redeployed cleanly after the env var change. End-to-end smoke test deferred to tomorrow — verify with a fresh advertiser (e.g. `POST /analyze` for `Asana` or `Webflow`) and watch the worker logs. If `gemini-3.5-flash` starts returning empty JSON or structural drift, fall back via `GEMINI_MODEL=gemini-2.5-flash` (one env var revert, no code change).
 
 ## 2026-05-28 — Housekeeping: gitignore logs/
 

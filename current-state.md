@@ -1,6 +1,6 @@
 # Campaign Intelligence Agent — Current State
 
-_Last updated: 2026-05-28 (CI checks live — import smoke + Docker build on PR/push)_
+_Last updated: 2026-05-28 (model bump to gemini-3.5-flash on hosted services — verify tomorrow)_
 
 ---
 
@@ -127,7 +127,7 @@ Default: `google linkedin`
 | Variable | Required | Purpose |
 |---|---|---|
 | `GEMINI_API_KEY` | **Yes** | Gemini API key — https://aistudio.google.com/apikey |
-| `GEMINI_MODEL` | No (default: `gemini-2.5-flash`) | Model for all passes + vision + generation |
+| `GEMINI_MODEL` | No (local default: `gemini-2.5-flash`; hosted: `gemini-3.5-flash`) | Model for all passes + vision + generation |
 | `META_ACCESS_TOKEN` | For Meta platform | Graph API token — needs Ad Library API approval |
 | `LINKEDIN_COMPANY_IDS` | No | Override built-in ID map: `notion:10257271,...` |
 
@@ -351,12 +351,13 @@ ThoughtSpot delta (2026-05-27 vs 2026-05-26) detected: "Dashboards Are Dead. Try
 
 ## Next Steps
 
-1. Install Railway GitHub App webhook on the `intelligence-worker` service (currently API-only, worker needs manual `serviceInstanceDeploy` per push)
-2. Add `client_id` scoping for multi-tenant (currently single-tenant — two customers analyzing the same advertiser would collide)
-3. Per-tenant Gemini key or quota (currently one shared key for all callers)
-4. Set Google Cloud billing alert on the Gemini API project to cap spend
-5. Re-run OpenAI, Anthropic, Rippling on hosted API to seed Postgres baselines
-6. Decide on hybrid model routing: 3.1 Pro for Phase 3 (Brand DNA + delta), Flash for analysis passes
-7. Day-2 run for HubSpot (and others) to populate intel signal deltas
-8. Schedule weekly re-scrapes (Railway cron or external scheduler)
-9. Dial Sentry `traces_sample_rate` back to 0.1–0.25 once volume picks up
+1. Verify `gemini-3.5-flash` end-to-end on hosted services (run a fresh advertiser like Asana or Webflow tomorrow; if outputs degrade, revert via `GEMINI_MODEL=gemini-2.5-flash` env var)
+2. Install Railway GitHub App webhook on the `intelligence-worker` service (currently API-only, worker needs manual `serviceInstanceDeploy` per push)
+3. Add `client_id` scoping for multi-tenant (currently single-tenant — two customers analyzing the same advertiser would collide)
+4. Per-tenant Gemini key or quota (currently one shared key for all callers)
+5. Set Google Cloud billing alert on the Gemini API project to cap spend
+6. Re-run OpenAI, Anthropic, Rippling on hosted API to seed Postgres baselines
+7. Decide on hybrid model routing: 3.5 Flash for analysis passes, 3.1 Pro for Phase 3 (Brand DNA + delta)
+8. Day-2 run for HubSpot (and others) to populate intel signal deltas
+9. Schedule weekly re-scrapes (Railway cron or external scheduler)
+10. Dial Sentry `traces_sample_rate` back to 0.1–0.25 once volume picks up
