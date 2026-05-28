@@ -2,12 +2,32 @@
 
 ---
 
-## 2026-05-27 — Containerization + Postgres support (Railway deploy)
+## 2026-05-28 — Day's-end recap (CLI POC → hosted service)
 
-**What changed:** `storage/db.py` (dual-backend rewrite), `analysis/agent.py` (SYSTEMIC-04 inline query → `db.get_stale_market_context()`), `api.py` (removed raw sqlite3 call in /regen), `requirements.txt` (+psycopg2-binary), `Dockerfile` (new), `.dockerignore` (new), `railway.toml` (new)
-**Why:** POC ready to host; Railway + Postgres selected. Playwright/Chromium require a specific base image (`mcr.microsoft.com/playwright/python`) rather than a minimal Python image.
-**How it helps:** `docker build` produces a deployable image. `DATABASE_URL` env var switches the entire persistence layer to Postgres — no other config needed. SQLite still works locally when `DATABASE_URL` is unset. `get_stale_market_context()` centralizes the SYSTEMIC-04 JSON query so it uses the right JSON dialect per backend (SQLite `json_extract` vs Postgres `jsonb`).
-**Traceback notes:** `_PgConn` wraps psycopg2 to expose the same `execute/executemany/commit/close` interface as sqlite3.Connection so all existing db callers work unchanged. Railway sets `$PORT` at runtime — CMD uses `${PORT:-8000}` so local `docker run` also works without setting PORT. `postgres://` URL prefix auto-corrected to `postgresql://` (Railway emits both).
+End-of-day snapshot of what shipped in this push. Detailed per-change entries follow below; this block exists so a future reader can grasp the scope of one day's work in one read.
+
+In ~12 hours the project went from a CLI tool that wrote markdown files locally to a hosted, authenticated, queue-backed REST service with CI and observability. Concretely:
+- **API surface:** new FastAPI `api.py` (5 endpoints — `POST /analyze`, `GET /jobs/{id}`, `GET /brand-dna/{advertiser}`, `GET /intel-signal/{advertiser}`, `POST /regen/{advertiser}`), polling-based with background job execution.
+- **Persistence:** `storage/db.py` rewritten for dual SQLite/Postgres backend; new `jobs` and `intel_signals` tables; `get_stale_market_context()` extracted from agent.py.
+- **Deploy:** Dockerfile (Playwright Python base), railway.toml, deployed live to Railway as two services (`intelligence-api` + `intelligence-worker`) backed by Postgres + Redis addons. Public URL: `https://intelligence-api-production-0758.up.railway.app` (Swagger at `/docs`).
+- **Security:** X-API-Key auth on every endpoint except `/docs`; slowapi per-IP rate limits.
+- **Resilience:** ARQ + Redis worker so analyze jobs survive container restarts (verified — Notion run completed cleanly).
+- **Observability:** Sentry active with `traces_sample_rate=1.0`; errors + perf traces flowing.
+- **CI/CD:** Railway GitHub App webhook on the API service (push → auto-deploy), GitHub Actions workflow runs import smoke test + Docker build on every PR/push.
+- **Repo:** new public GitHub repo (`rishinagarajan-diffai/intelligence-agent`) with full source.
+- **Quality:** vision extraction bumped from top 25 → top 50 image-only ads per run.
+
+Verified end-to-end live: HubSpot run (135 ads, 16.3k chars), Salesforce (101 ads, 16.6k chars), Notion via the new worker queue (141 ads, 12.9k chars).
+
+Remaining POC gaps: single-tenant (no `client_id` scoping), shared Gemini key (no per-tenant quotas), Meta Ad Library still blocked on API approval, worker doesn't yet have the GitHub App webhook (manual `serviceInstanceDeploy` per push), no Google Cloud billing alert on the Gemini key yet.
+
+---
+
+## 2026-05-28 — Housekeeping: gitignore logs/
+
+**What changed:** `.gitignore` (+`logs/`).
+**Why:** `logs/` directory was untracked but showing up on every `git status` — it's a runtime output not source.
+**How it helps:** Cleaner `git status`; logs from local pipeline runs won't accidentally get committed.
 
 ## 2026-05-28 — CI: import smoke test + Docker build on every PR/push
 
@@ -55,6 +75,13 @@
 **Why:** Move from localhost API to a hosted endpoint so external systems can call the pipeline.
 **How it helps:** API now serves at `https://intelligence-api-production-0758.up.railway.app` with the Postgres addon attached via `${{Postgres.DATABASE_URL}}` reference. HubSpot live test: 135 ads scraped + 8-pass analyzed in 3.7 min, 16,302-char brand DNA returned inline via `GET /jobs/{id}`. Docs available at `/docs`. GitHub repo: `https://github.com/rishinagarajan-diffai/intelligence-agent` (public).
 **Traceback notes:** Railway provisioning order matters — (1) `serviceCreate` with `source.repo`, (2) `variableUpsert` for `GEMINI_API_KEY`, (3) `variableUpsert` for `DATABASE_URL` = `${{Postgres.DATABASE_URL}}` (literal value, not the resolved URL), (4) `variableUpsert` for `PORT=8000` so the domain target matches uvicorn's bind port, (5) `serviceInstanceDeploy` with `commitSha` arg pointing at HEAD, (6) `serviceDomainCreate` with `targetPort: 8000`. **The `commitSha` arg is critical** — without it, `serviceInstanceDeploy` redeploys the *snapshot at service creation time*, not the latest GitHub commit. This caused 5 consecutive failed builds before I realized Railway was deploying commit `fc5d05d` (the initial one with the broken `startCommand`) on every redeploy. GitHub auto-deploy webhooks are NOT wired up when the service is created via API — only via the dashboard. Workaround: pass `commitSha` explicitly every redeploy, or wire the webhook manually.
+
+## 2026-05-27 — Containerization + Postgres support (Railway deploy)
+
+**What changed:** `storage/db.py` (dual-backend rewrite), `analysis/agent.py` (SYSTEMIC-04 inline query → `db.get_stale_market_context()`), `api.py` (removed raw sqlite3 call in /regen), `requirements.txt` (+psycopg2-binary), `Dockerfile` (new), `.dockerignore` (new), `railway.toml` (new)
+**Why:** POC ready to host; Railway + Postgres selected. Playwright/Chromium require a specific base image (`mcr.microsoft.com/playwright/python`) rather than a minimal Python image.
+**How it helps:** `docker build` produces a deployable image. `DATABASE_URL` env var switches the entire persistence layer to Postgres — no other config needed. SQLite still works locally when `DATABASE_URL` is unset. `get_stale_market_context()` centralizes the SYSTEMIC-04 JSON query so it uses the right JSON dialect per backend (SQLite `json_extract` vs Postgres `jsonb`).
+**Traceback notes:** `_PgConn` wraps psycopg2 to expose the same `execute/executemany/commit/close` interface as sqlite3.Connection so all existing db callers work unchanged. Railway sets `$PORT` at runtime — CMD uses `${PORT:-8000}` so local `docker run` also works without setting PORT. `postgres://` URL prefix auto-corrected to `postgresql://` (Railway emits both).
 
 ## 2026-05-27 — Salesforce API smoke test
 
