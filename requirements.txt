@@ -11,3 +11,4 @@ uvicorn>=0.27.0
 psycopg2-binary>=2.9.0
 slowapi>=0.1.9
 sentry-sdk[fastapi]>=1.40.0
+arq>=0.25.0

@@ -12,7 +12,7 @@ RUN python -m playwright install chromium
 
 COPY . .
 
-RUN printf '#!/bin/sh\nexec uvicorn api:app --host 0.0.0.0 --port ${PORT:-8000}\n' > /start.sh && chmod +x /start.sh
+RUN printf '#!/bin/sh\nif [ "$SERVICE_MODE" = "worker" ]; then\n  exec arq worker.WorkerSettings\nelse\n  exec uvicorn api:app --host 0.0.0.0 --port ${PORT:-8000}\nfi\n' > /start.sh && chmod +x /start.sh
 
 EXPOSE 8000
 

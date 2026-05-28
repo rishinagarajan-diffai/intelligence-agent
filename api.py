@@ -43,13 +43,17 @@ if _SENTRY_DSN:
         send_default_pii=False,
     )
 
-from fastapi import BackgroundTasks, Depends, FastAPI, Header, HTTPException, Request
+from arq import create_pool
+from arq.connections import RedisSettings
+from fastapi import Depends, FastAPI, Header, HTTPException, Request
 from pydantic import BaseModel, Field
 from slowapi import Limiter, _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
 from slowapi.util import get_remote_address
 
 from storage import db
+
+REDIS_URL = os.environ.get("REDIS_URL", "")
 
 
 # ---------------------------------------------------------------------------
@@ -78,10 +82,23 @@ limiter = Limiter(key_func=get_remote_address)
 # App
 # ---------------------------------------------------------------------------
 
+_redis_pool = None
+
+
+async def _get_redis_pool():
+    """Lazy-init the ARQ Redis pool. Returns None if REDIS_URL is not configured."""
+    global _redis_pool
+    if _redis_pool is None and REDIS_URL:
+        _redis_pool = await create_pool(RedisSettings.from_dsn(REDIS_URL))
+    return _redis_pool
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     db.init_db()
     yield
+    if _redis_pool is not None:
+        await _redis_pool.close()
 
 
 app = FastAPI(title="Campaign Intelligence API", lifespan=lifespan)
@@ -115,34 +132,16 @@ class JobResponse(BaseModel):
 
 
 # ---------------------------------------------------------------------------
-# Background pipeline runner
-# ---------------------------------------------------------------------------
-
-async def _run_pipeline(job_id: str, req: AnalyzeRequest) -> None:
-    db.update_job(job_id, "running")
-    try:
-        import main as pipeline
-        await pipeline.run(
-            advertiser=req.advertiser,
-            competitors=req.competitors,
-            platforms=req.platforms,
-            scenario=req.scenario,
-        )
-        db.update_job(job_id, "complete")
-    except Exception as exc:
-        db.update_job(job_id, "failed", error=str(exc))
-        if _SENTRY_DSN:
-            import sentry_sdk
-            sentry_sdk.capture_exception(exc)
-
-
-# ---------------------------------------------------------------------------
 # Endpoints
 # ---------------------------------------------------------------------------
 
 @app.post("/analyze", status_code=202, dependencies=[Depends(require_api_key)])
 @limiter.limit("5/hour")
-async def analyze(request: Request, req: AnalyzeRequest, background_tasks: BackgroundTasks):
+async def analyze(request: Request, req: AnalyzeRequest):
+    pool = await _get_redis_pool()
+    if pool is None:
+        raise HTTPException(status_code=503, detail="REDIS_URL not configured — worker queue unavailable")
+
     job_id = str(uuid.uuid4())
     db.create_job(
         job_id=job_id,
@@ -151,7 +150,10 @@ async def analyze(request: Request, req: AnalyzeRequest, background_tasks: Backg
         platforms=req.platforms,
         scenario=req.scenario,
     )
-    background_tasks.add_task(_run_pipeline, job_id, req)
+    await pool.enqueue_job(
+        "run_pipeline",
+        job_id, req.advertiser, req.competitors, req.platforms, req.scenario,
+    )
     return {"job_id": job_id, "status": "queued"}
 
 
