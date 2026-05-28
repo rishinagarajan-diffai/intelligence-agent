@@ -318,7 +318,7 @@ Before this is production-ready as a service:
 
 1. **Meta Graph API approval** — pending since 2026-05-22; unblocks noise-free Meta scraping
 2. **Meta page-ID filtering** — post-filter by page name to remove keyword-match noise (interim fix)
-3. ~~**`client_id` scoping**~~ — DONE 2026-05-28 (code complete + locally tested; deploy + prod migration pending). All 5 tables + full pipeline now client-scoped. Next layer: derive `client_id` from API key (registry) once per-tenant keys are issued.
+3. ~~**`client_id` scoping**~~ — DONE 2026-05-28 (shipped + prod-verified). All 5 tables + full pipeline client-scoped; prod migrated (308/36/3/4/1 rows backfilled to `'default'`). Live two-client smoke test passed: HubSpot analyzed under `tenantB` did not clobber the existing `default` data (ads 99/94, brand_dna 1/1, analysis 9/9, isolated). Next layer: derive `client_id` from API key (registry) once per-tenant keys are issued.
 4. **Scheduled re-scraping** — one-shot today; needs weekly refresh of `intel_signals`
 5. **`--limit` CLI flag** — scrape limit not tunable without editing source
 6. **LinkedIn auth** — image-only ads have no copy without authenticated scraping
@@ -373,7 +373,7 @@ ThoughtSpot delta (2026-05-27 vs 2026-05-26) detected: "Dashboards Are Dead. Try
 
 1. ✅ **DONE 2026-05-28** — `gemini-3.5-flash` verified end-to-end on hosted services. Asana run via `POST /analyze` → `complete` in 285s, 148 ads, 15,616-char Brand DNA, all 11 sections present, voice + synthetic templates on-brand. No structural drift. (Revert lever if needed: `GEMINI_MODEL=gemini-2.5-flash` env var.)
 2. Install Railway GitHub App webhook on the `intelligence-worker` service (currently API-only, worker needs manual `serviceInstanceDeploy` per push)
-3. ✅ **DONE 2026-05-28 (code)** — `client_id` scoping across all 5 tables + pipeline (explicit field, backfill to `'default'`). Deploy + prod migration + two-client smoke test still pending.
+3. ✅ **DONE 2026-05-28 (shipped + verified)** — `client_id` scoping across all 5 tables + pipeline (explicit field, backfill to `'default'`). Deployed (commit `d640f26`), prod migrated, and live two-client smoke test passed (HubSpot under `tenantB` isolated from `default` — no collision).
 4. Per-tenant Gemini key or quota (currently one shared key for all callers)
 5. Set Google Cloud billing alert on the Gemini API project to cap spend
 6. Re-run OpenAI, Anthropic, Rippling on hosted API to seed Postgres baselines
